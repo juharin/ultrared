@@ -2,7 +2,7 @@ package agent
 
 // End-to-end test of the agent loop against a fake Anthropic API (httptest).
 // No API key or network needed:   go test ./...
-// The Docker variant runs only if Docker is available: go test -run Docker ./internal/agent
+// The Docker variant runs only if Docker is available, and not with -short.
 
 import (
 	"context"
@@ -112,6 +112,9 @@ func TestLoopLocal(t *testing.T) {
 }
 
 func TestLoopDocker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a container; skipped with -short")
+	}
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		t.Skip("docker not available")
 	}

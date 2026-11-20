@@ -1,0 +1,93 @@
+# Dev tasks. Install Task with `brew install go-task`; `task` lists everything.
+version: '3'
+
+# The API key and other settings come from .env (gitignored; see .env.example).
+dotenv: ['.env']
+
+vars:
+  SANDBOX_IMAGE: ultrared-sandbox
+  DIR: '{{.DIR | default ".tmp/workspace"}}'
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  check:
+    desc: Format check, vet and fast tests. Run before every push
+    cmds:
+      - task: fmt:check
+      - go vet ./...
+      - go test -race -short ./...
+
+  test-all:
+    desc: All tests, including the Docker executor test (needs Docker)
+    cmds:
+      - go test -race ./...
+
+  fmt:
+    desc: Format all Go code
+    cmds:
+      - go list -f '{{"{{"}}.Dir}}' ./... | xargs gofmt -w
+
+  fmt:check:
+    desc: Fail if any Go file needs gofmt
+    silent: true
+    cmds:
+      - |
+        files=$(go list -f '{{"{{"}}.Dir}}' ./... | xargs gofmt -l)
+        if [ -n "$files" ]; then echo "These files need gofmt (run: task fmt):"; echo "$files"; exit 1; fi
+
+  vuln:
+    desc: Check code and dependencies for known vulnerabilities (govulncheck)
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
+  build:
+    desc: Build bin/ultrared
+    cmds:
+      - go build -o bin/ultrared ./cmd/ultrared
+
+  sandbox:
+    desc: Build the sandbox image the agent's tools run in
+    sources:
+      - sandbox/Dockerfile
+    status:
+      - docker image inspect {{.SANDBOX_IMAGE}} >/dev/null 2>&1
+    cmds:
+      - docker build -t {{.SANDBOX_IMAGE}} sandbox
+
+  run:
+    desc: 'Run the agent with tools in the sandbox container. DIR=path sets the workspace (default .tmp/workspace); flags after --, e.g. task run -- -yolo'
+    interactive: true
+    deps: [sandbox]
+    preconditions:
+      - sh: '[ -n "$ANTHROPIC_API_KEY" ]'
+        msg: 'ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example) or export it.'
+    cmds:
+      - mkdir -p "{{.DIR}}" .tmp/logs
+      - go run ./cmd/ultrared -dir "{{.DIR}}" -docker {{.SANDBOX_IMAGE}} -log ".tmp/logs/$(date +%Y%m%d-%H%M%S).jsonl" {{.CLI_ARGS}}
+
+  run:host:
+    desc: 'Run the agent with tools directly on this machine (no sandbox!). Same DIR and -- flags as run'
+    interactive: true
+    preconditions:
+      - sh: '[ -n "$ANTHROPIC_API_KEY" ]'
+        msg: 'ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example) or export it.'
+    cmds:
+      - mkdir -p "{{.DIR}}" .tmp/logs
+      - go run ./cmd/ultrared -dir "{{.DIR}}" -log ".tmp/logs/$(date +%Y%m%d-%H%M%S).jsonl" {{.CLI_ARGS}}
+
+  wasm:check:
+    desc: Vet and build the WASM experiment (separate module, needs Go >= 1.25)
+    dir: experiments/wasm
+    cmds:
+      - go vet ./host
+      - GOOS=wasip1 GOARCH=wasm go build -o /dev/null ./guest
+      - go build -o /dev/null ./host
+
+  clean:
+    desc: Remove build outputs (keeps .tmp/, which holds your scratch workspaces and logs)
+    cmds:
+      - rm -rf bin

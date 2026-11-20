@@ -48,13 +48,18 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
 | Target clients: a desktop app, maybe mobile; the CLI is the first client | The user's goal (20 Nov 2026). A phone can't run the loop or Docker, so the server must be reachable over the network, with auth from day one. The desktop app either starts the server locally or connects to a remote one | — |
 | Clients talk to the loop only through typed, serializable events (with session id and sequence number), and approvals are asynchronous events | Desktop and mobile clients will be in other languages. Events give replay, resume and multi-device for free. `internal/agent` never does terminal I/O | — |
 | Wire contract in `api/` (OpenAPI + event JSON schema), written once the server exists; clients generate code from it | Language-neutral; the OpenCode precedent (doc 02) | You prefer typed RPC (e.g. Connect/protobuf) |
+| Task (`Taskfile.yml`) as the task runner, installed with Homebrew locally and `go-task/setup-task` in CI; not pinned in `go.mod` | Reads `.env` natively, includes sub-Taskfiles (for `apps/` later), skips up-to-date work, lists tasks with descriptions, works on Windows. Keeping it out of `go.mod` keeps the module's dependencies at two | The extra install becomes a problem for contributors |
+| Scratch workspaces and logs in `.tmp/`, not `tmp/` | Go tooling and the gofmt check skip dot-directories, so agent-written Go code never becomes part of this module | — |
+| CI on the latest stable Go, not the `go.mod` minimum | Matches local development; govulncheck would flag stdlib issues in an old patch release | You need to prove compatibility with older Go versions |
 | Layout: `cmd/` + `internal/` packages along the brain / hands / client boundaries, one binary with subcommands later (`ultrared chat`, `ultrared serve`) | `internal/` keeps APIs free to change; the server becomes a second client of the same packages. UI clients go in `apps/` in the same repo, so protocol and client changes land together | The UI needs its own release cadence |
 
 ## Known limitations / TODO (rough priority)
 - [x] Publish to your own GitHub repo with `main` as the default branch (see "What has been done", item 4).
 - [x] Project layout: `cmd/` + `internal/`, module `github.com/juharin/ultrared`.
-- [ ] **Dev loop:** a Makefile (`check`, `test-all`, `build`, `run`, `sandbox`), a project sandbox image (`sandbox/Dockerfile` with the Go toolchain, ripgrep, git), `.env` + `.env.example` for the API key, and a gitignored `tmp/` for scratch workspaces and logs. Add `-short` skipping to the Docker test.
-- [ ] **CI:** a GitHub Actions workflow running `make check` and the Docker test on PRs, branch protection on `main`, `govulncheck`, Dependabot. Later: a manually triggered live-API smoke test.
+- [x] **Dev loop:** `Taskfile.yml` (`check`, `test-all`, `build`, `run`, `sandbox`, …), the sandbox image `sandbox/Dockerfile` (Go, git, ripgrep), `.env.example`, and a gitignored `.tmp/` for scratch workspaces and logs. The Docker test skips under `-short`.
+- [x] **CI:** `.github/workflows/ci.yml` runs `task check`, `task test-all` (with Docker), `task wasm:check` and `task vuln` on PRs and pushes to `main`. Dependabot covers Go modules, Actions and the sandbox image.
+- [ ] **Branch protection** on `main`: require the CI checks to pass (a GitHub setting, not a file).
+- [ ] Live-API smoke test: a manually triggered workflow with the API key as a secret, behind a `live` build tag.
 - [ ] **Run against the real API on the Mac** and fix whatever breaks. Watch: prompt caching (not enabled), `max_tokens` stop reason, very long outputs.
 - [ ] **Event seam:** replace the `emit`/`approve` callbacks with typed session events and asynchronous approvals; the CLI renders events. Then rebuild the conversation from the JSONL/SQLite event log and add `resume <session>`. This is the first step toward client–server and the desktop app.
 - [ ] Context management: no compaction yet. Add token counting (`usage` from responses) and threshold compaction (doc 02, Rec. 7).

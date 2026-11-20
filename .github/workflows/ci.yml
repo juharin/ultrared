@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - uses: go-task/setup-task@v2
+        with:
+          version: 3.54.0
+      - name: Format, vet, fast tests
+        run: task check
+      - name: All tests, including the Docker executor
+        run: task test-all # GitHub's Ubuntu runners have Docker
+      - name: WASM experiment builds
+        run: task wasm:check
+
+  vuln:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - uses: go-task/setup-task@v2
+        with:
+          version: 3.54.0
+      - run: task vuln
