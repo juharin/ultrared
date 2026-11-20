@@ -3,8 +3,14 @@
 /bin/
 /chat
 *.wasm
+# scratch workspaces and transcripts from `task run`
+/.tmp/
+# Task's up-to-date checksums
+/.task/
 # agent transcripts
 *.jsonl
+# secrets (see .env.example)
+.env
 .DS_Store
 # Claude Code local state (worktrees, personal settings)
 /.claude/worktrees/

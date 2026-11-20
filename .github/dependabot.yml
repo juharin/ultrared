@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories: ["/", "/experiments/wasm"]
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /sandbox
+    schedule:
+      interval: weekly

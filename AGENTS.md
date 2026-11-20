@@ -12,14 +12,20 @@ A coding-agent harness in Go, built for learning. Read `CONTEXT.md` for the curr
 - `internal/executor/`: the `Executor` interface ("hands") with `Local` and `Docker` implementations.
 
 ## Commands
-- Build: `go build ./...` (the binary: `go build ./cmd/ultrared`)
-- Run: `go run ./cmd/ultrared -dir <workspace> [-docker IMAGE]`
-- Test: `go test ./...` (uses a fake Anthropic API; the Docker test is skipped if Docker is down)
-- Vet / format: `go vet ./...` and `gofmt -l .` (the output must be empty)
-- WASM experiment: separate module in `experiments/wasm/`; see its README
+Dev tasks live in `Taskfile.yml` (`task` lists them). Before finishing a change, run `task check` and make sure it passes; CI runs the same.
+- Check: `task check` (gofmt check, `go vet`, `go test -race -short`; the tests use a fake Anthropic API)
+- All tests: `task test-all` (adds the Docker executor test; it is skipped if Docker is down)
+- Format: `task fmt`
+- Build: `task build` (writes `bin/ultrared`)
+- Run: `task run` (needs `ANTHROPIC_API_KEY`; tools run in the sandbox container on `.tmp/workspace`)
+- WASM experiment: separate module in `experiments/wasm/`; `task wasm:check` builds it
+
+Without Task, the plain Go commands work too: `go vet ./...`, `go test ./...`, `go run ./cmd/ultrared -dir <workspace>`.
+
+Scratch output (workspaces, transcripts) belongs in `.tmp/`, never in the source tree.
 
 ## Conventions
-- Standard library first. Current dependencies are `anthropic-sdk-go` and `invopop/jsonschema`. Ask before adding more.
+- Standard library first. Current dependencies are `anthropic-sdk-go` and `invopop/jsonschema`. Ask before adding more, including dev tools pinned in `go.mod`.
 - All side effects go through the `Executor` interface (`internal/executor/`). Tools must never call `os`/`exec` directly.
 - `internal/agent` must not read stdin or print. It reports through callbacks (later: events), so that every client (CLI now, desktop and mobile later) can drive it.
 - Tool errors are returned as `error` and become `is_error` tool results. Never `panic` in a tool.
