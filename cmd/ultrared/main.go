@@ -1,8 +1,8 @@
 // A minimal coding-agent harness in Go, grown from your original main.go.
 //
-//	go run . -dir ./myrepo                     # tools run on the host (no isolation!)
-//	go run . -dir ./myrepo -docker golang:1.24 # tools run in a locked-down container
-//	go run . -dir ./myrepo -docker golang:1.24 -runtime runsc   # + gVisor
+//	go run ./cmd/ultrared -dir ./myrepo                     # tools run on the host (no isolation!)
+//	go run ./cmd/ultrared -dir ./myrepo -docker golang:1.24 # tools run in a locked-down container
+//	go run ./cmd/ultrared -dir ./myrepo -docker golang:1.24 -runtime runsc   # + gVisor
 //
 // Needs ANTHROPIC_API_KEY. ANTHROPIC_BASE_URL is honoured too.
 package main
@@ -18,6 +18,9 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/juharin/ultrared/internal/agent"
+	"github.com/juharin/ultrared/internal/executor"
+	"github.com/juharin/ultrared/internal/tools"
 )
 
 func main() {
@@ -26,15 +29,15 @@ func main() {
 	runtime := flag.String("runtime", "", "container runtime, e.g. runsc for gVisor")
 	network := flag.Bool("net", false, "give the container network access")
 	yolo := flag.Bool("yolo", false, "do not ask before bash/write/edit")
-	model := flag.String("model", string(DefaultModel), "model id")
+	model := flag.String("model", string(agent.DefaultModel), "model id")
 	logPath := flag.String("log", "", "append a JSONL transcript here")
 	flag.Parse()
 
 	ctx := context.Background()
 
-	var ex Executor = &LocalExecutor{Root: *dir}
+	var ex executor.Executor = &executor.Local{Root: *dir}
 	if *image != "" {
-		d, err := NewDockerExecutor(ctx, *image, *dir, *runtime, *network)
+		d, err := executor.NewDocker(ctx, *image, *dir, *runtime, *network)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -56,19 +59,19 @@ func main() {
 	}
 
 	client := anthropic.NewClient()
-	agent := &Agent{
-		client: &client, model: anthropic.Model(*model), exec: ex,
-		tools: Tools(), maxTurns: 60,
+	ag := &agent.Agent{
+		Client: &client, Model: anthropic.Model(*model), Exec: ex,
+		Tools: tools.All(), MaxTurns: 60,
 	}
 	if *logPath != "" {
 		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err == nil {
-			agent.log = f
+			ag.Log = f
 			defer f.Close()
 		}
 	}
 	if !*yolo {
-		agent.approve = func(name string, input json.RawMessage) bool {
+		ag.Approve = func(name string, input json.RawMessage) bool {
 			if name == "read_file" {
 				return true
 			}
@@ -114,10 +117,17 @@ func main() {
 			continue
 		}
 		turnCtx, done := intr.turn(ctx)
-		err := agent.Send(turnCtx, in, emit)
+		err := ag.Send(turnCtx, in, emit)
 		done()
 		if err != nil {
 			fmt.Printf("Error: %s\n", err)
 		}
 	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

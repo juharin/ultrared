@@ -31,6 +31,8 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
    - tests
    
    As of 20 Nov 2026, `go test ./...` passes on macOS too, including the Docker executor test.
+
+   The code lives in the module `github.com/juharin/ultrared`: the CLI in `cmd/ultrared/`, and the loop, tools and executors in `internal/agent/`, `internal/tools/` and `internal/executor/`.
 3. **Experiment.** `experiments/wasm`: wazero ran a Go-built WASI guest with a read-only mount. Instantiation took ~10 ms; the host filesystem was invisible to the guest.
 4. **Published** to `github.com/juharin/ultrared` as `origin`, with `main` as the default branch. The upstream workshop repo (`ghuntley/how-to-build-a-coding-agent`) is not configured as a remote. The local `harness` branch points at the same commit as `main` and was never pushed; delete it or keep it, it holds nothing extra.
 
@@ -43,24 +45,32 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
 | `Executor` seam ("hands") | Lets execution move to container, remote or local runner without touching the loop | — |
 | Docker hardened (cap-drop, no-new-privs, no network, limits, host UID) | Good enough for a single user on their own repos | Untrusted or multi-tenant code. Then use gVisor or Firecracker/Kata (Linux) |
 | Loop outside the container | Anthropic's lessons: debuggability, lazy provisioning, credentials kept out of the sandbox | — |
+| Target clients: a desktop app, maybe mobile; the CLI is the first client | The user's goal (20 Nov 2026). A phone can't run the loop or Docker, so the server must be reachable over the network, with auth from day one. The desktop app either starts the server locally or connects to a remote one | — |
+| Clients talk to the loop only through typed, serializable events (with session id and sequence number), and approvals are asynchronous events | Desktop and mobile clients will be in other languages. Events give replay, resume and multi-device for free. `internal/agent` never does terminal I/O | — |
+| Wire contract in `api/` (OpenAPI + event JSON schema), written once the server exists; clients generate code from it | Language-neutral; the OpenCode precedent (doc 02) | You prefer typed RPC (e.g. Connect/protobuf) |
+| Layout: `cmd/` + `internal/` packages along the brain / hands / client boundaries, one binary with subcommands later (`ultrared chat`, `ultrared serve`) | `internal/` keeps APIs free to change; the server becomes a second client of the same packages. UI clients go in `apps/` in the same repo, so protocol and client changes land together | The UI needs its own release cadence |
 
 ## Known limitations / TODO (rough priority)
 - [x] Publish to your own GitHub repo with `main` as the default branch (see "What has been done", item 4).
+- [x] Project layout: `cmd/` + `internal/`, module `github.com/juharin/ultrared`.
+- [ ] **Dev loop:** a Makefile (`check`, `test-all`, `build`, `run`, `sandbox`), a project sandbox image (`sandbox/Dockerfile` with the Go toolchain, ripgrep, git), `.env` + `.env.example` for the API key, and a gitignored `tmp/` for scratch workspaces and logs. Add `-short` skipping to the Docker test.
+- [ ] **CI:** a GitHub Actions workflow running `make check` and the Docker test on PRs, branch protection on `main`, `govulncheck`, Dependabot. Later: a manually triggered live-API smoke test.
 - [ ] **Run against the real API on the Mac** and fix whatever breaks. Watch: prompt caching (not enabled), `max_tokens` stop reason, very long outputs.
+- [ ] **Event seam:** replace the `emit`/`approve` callbacks with typed session events and asynchronous approvals; the CLI renders events. Then rebuild the conversation from the JSONL/SQLite event log and add `resume <session>`. This is the first step toward client–server and the desktop app.
 - [ ] Context management: no compaction yet. Add token counting (`usage` from responses) and threshold compaction (doc 02, Rec. 7).
 - [ ] Streaming responses (`client.Messages.NewStreaming`) for a responsive UI.
-- [ ] Rebuild the conversation from the JSONL/SQLite event log, then add `resume <session>`. This is the first step toward client–server.
 - [ ] `grep`/`glob` tools (ripgrep), and maybe a `list_files`.
 - [ ] Permission rules as data (allow/ask/deny patterns), replacing yes/no prompts.
 - [ ] Persistent in-container executor process, to avoid ~85 ms of `docker exec` per call.
-- [ ] Server split: HTTP API + SSE event stream; approvals as events; TUI becomes a client (doc 03 §7).
+- [ ] Server split: HTTP API + SSE event stream + auth; approvals as events; the CLI becomes a client (doc 03 §7). Then write `api/openapi.yaml` and build a first desktop prototype in `apps/desktop/`.
+- [ ] Mobile: when the app is in the background, approvals need push notifications (iOS drops live connections).
 - [ ] Sandbox lifecycle: clone the repo inside the container, return a branch or diff, TTL reaper, lazy provisioning.
 - [ ] Measurement: 10–20 tasks from your own merged PRs; compare pass rate and tokens against Pi with the same model.
 - [ ] Optional: code mode via QuickJS-in-wazero (doc 04 §3.1).
 
 ## Open questions
-- Which clients first: terminal (Bubble Tea) or web?
-- Where will the server run? On a Linux box, gVisor becomes available.
+- Desktop UI technology: a web UI in Tauri 2 (one codebase for desktop and mobile), Wails (Go, desktop only), or native SwiftUI? Decide once the server API exists.
+- Where will the server run? On a Linux box, gVisor becomes available. Mobile needs it reachable over the network; for personal use a private network such as Tailscale is the simplest.
 - Single user only, or multi-user later? This decides the isolation tier and auth design.
 
 ## Caveats on the research

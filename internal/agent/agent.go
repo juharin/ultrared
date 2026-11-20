@@ -1,22 +1,26 @@
-package main
+// Package agent is the "brain": the loop that calls the model, runs the tools it
+// asks for through an executor, and feeds the results back.
+package agent
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/juharin/ultrared/internal/executor"
+	"github.com/juharin/ultrared/internal/tools"
 )
 
 type Agent struct {
-	client   *anthropic.Client
-	model    anthropic.Model
-	exec     Executor
-	tools    []ToolDefinition
-	approve  func(name string, input json.RawMessage) bool
-	maxTurns int
-	log      *os.File // optional JSONL transcript: your debugger and, later, your session store
+	Client   *anthropic.Client
+	Model    anthropic.Model
+	Exec     executor.Executor
+	Tools    []tools.Definition
+	Approve  func(name string, input json.RawMessage) bool // nil = allow everything
+	MaxTurns int
+	Log      io.Writer // optional JSONL transcript: your debugger and, later, your session store
 
 	conversation []anthropic.MessageParam
 }
@@ -34,7 +38,7 @@ func (a *Agent) Send(ctx context.Context, userText string, emit func(kind, text 
 	a.conversation = append(a.conversation,
 		anthropic.NewUserMessage(anthropic.NewTextBlock(userText)))
 
-	for turn := 0; turn < a.maxTurns; turn++ {
+	for turn := 0; turn < a.MaxTurns; turn++ {
 		msg, err := a.infer(ctx)
 		if err != nil {
 			return err
@@ -60,18 +64,18 @@ func (a *Agent) Send(ctx context.Context, userText string, emit func(kind, text 
 		a.conversation = append(a.conversation, anthropic.NewUserMessage(results...))
 		a.record("tool_results", results)
 	}
-	return fmt.Errorf("stopped after %d turns", a.maxTurns)
+	return fmt.Errorf("stopped after %d turns", a.MaxTurns)
 }
 
 func (a *Agent) runTool(ctx context.Context, name string, input json.RawMessage) (string, bool) {
-	for _, t := range a.tools {
+	for _, t := range a.Tools {
 		if t.Name != name {
 			continue
 		}
-		if a.approve != nil && !a.approve(name, input) {
+		if a.Approve != nil && !a.Approve(name, input) {
 			return "denied by user", true
 		}
-		out, err := t.Function(ctx, a.exec, input)
+		out, err := t.Function(ctx, a.Exec, input)
 		if err != nil {
 			return "ERROR: " + err.Error(), true
 		}
@@ -81,24 +85,24 @@ func (a *Agent) runTool(ctx context.Context, name string, input json.RawMessage)
 }
 
 func (a *Agent) infer(ctx context.Context) (*anthropic.Message, error) {
-	tools := make([]anthropic.ToolUnionParam, 0, len(a.tools))
-	for _, t := range a.tools {
-		tools = append(tools, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
+	params := make([]anthropic.ToolUnionParam, 0, len(a.Tools))
+	for _, t := range a.Tools {
+		params = append(params, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
 			Name:        t.Name,
 			Description: anthropic.String(t.Description),
 			InputSchema: t.InputSchema,
 		}})
 	}
-	return a.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     a.model,
+	return a.Client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     a.Model,
 		MaxTokens: 16_000, // 1024 is too small: long edits get cut off mid tool call
-		System:    []anthropic.TextBlockParam{{Text: systemPrompt + loadAgentsMD(ctx, a.exec)}},
+		System:    []anthropic.TextBlockParam{{Text: systemPrompt + loadAgentsMD(ctx, a.Exec)}},
 		Messages:  a.conversation,
-		Tools:     tools,
+		Tools:     params,
 	})
 }
 
-func loadAgentsMD(ctx context.Context, ex Executor) string {
+func loadAgentsMD(ctx context.Context, ex executor.Executor) string {
 	b, err := ex.ReadFile(ctx, "AGENTS.md")
 	if err != nil || len(b) == 0 {
 		return ""
@@ -107,11 +111,11 @@ func loadAgentsMD(ctx context.Context, ex Executor) string {
 }
 
 func (a *Agent) record(kind string, v any) {
-	if a.log == nil {
+	if a.Log == nil {
 		return
 	}
 	line, _ := json.Marshal(map[string]any{"kind": kind, "data": v})
-	a.log.Write(append(line, '\n'))
+	a.Log.Write(append(line, '\n'))
 }
 
 func truncate(s string, n int) string {

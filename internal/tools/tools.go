@@ -1,4 +1,6 @@
-package main
+// Package tools defines the tools the model can call. Each tool does its side
+// effects only through an executor.Executor.
+package tools
 
 import (
 	"context"
@@ -8,21 +10,22 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/invopop/jsonschema"
+	"github.com/juharin/ultrared/internal/executor"
 )
 
-// ToolDefinition is your original type, with two changes: the function gets a
+// Definition is your original ToolDefinition type, with two changes: the function gets a
 // context and the Executor, and errors are returned instead of panicking.
 // A tool error goes back to the model as an is_error tool_result so it can
 // correct itself.
-type ToolDefinition struct {
+type Definition struct {
 	Name        string
 	Description string
 	InputSchema anthropic.ToolInputSchemaParam
-	Function    func(ctx context.Context, ex Executor, input json.RawMessage) (string, error)
+	Function    func(ctx context.Context, ex executor.Executor, input json.RawMessage) (string, error)
 }
 
-func Tools() []ToolDefinition {
-	return []ToolDefinition{BashDefinition, ReadFileDefinition, WriteFileDefinition, EditFileDefinition}
+func All() []Definition {
+	return []Definition{Bash, ReadFile, WriteFile, EditFile}
 }
 
 const maxOutput = 30_000 // chars; keeps one big output from eating the context
@@ -49,11 +52,11 @@ type BashInput struct {
 	Command string `json:"command" jsonschema_description:"Shell command to run in the workspace root."`
 }
 
-var BashDefinition = ToolDefinition{
+var Bash = Definition{
 	Name:        "bash",
 	Description: "Run a shell command in the workspace. Use it for ls, rg, tests, builds and git. Output is truncated if very long.",
 	InputSchema: GenerateSchema[BashInput](),
-	Function: func(ctx context.Context, ex Executor, raw json.RawMessage) (string, error) {
+	Function: func(ctx context.Context, ex executor.Executor, raw json.RawMessage) (string, error) {
 		in, err := decode[BashInput](raw)
 		if err != nil {
 			return "", err
@@ -72,11 +75,11 @@ type ReadFileInput struct {
 	Path string `json:"path" jsonschema_description:"Relative path of a file in the workspace."`
 }
 
-var ReadFileDefinition = ToolDefinition{
+var ReadFile = Definition{
 	Name:        "read_file",
 	Description: "Read a file and return its contents with line numbers. Do not use on directories.",
 	InputSchema: GenerateSchema[ReadFileInput](),
-	Function: func(ctx context.Context, ex Executor, raw json.RawMessage) (string, error) {
+	Function: func(ctx context.Context, ex executor.Executor, raw json.RawMessage) (string, error) {
 		in, err := decode[ReadFileInput](raw)
 		if err != nil {
 			return "", err
@@ -100,11 +103,11 @@ type WriteFileInput struct {
 	Content string `json:"content" jsonschema_description:"Full new contents of the file."`
 }
 
-var WriteFileDefinition = ToolDefinition{
+var WriteFile = Definition{
 	Name:        "write_file",
 	Description: "Create a new file or completely overwrite an existing one. Prefer edit_file for changes to existing files.",
 	InputSchema: GenerateSchema[WriteFileInput](),
-	Function: func(ctx context.Context, ex Executor, raw json.RawMessage) (string, error) {
+	Function: func(ctx context.Context, ex executor.Executor, raw json.RawMessage) (string, error) {
 		in, err := decode[WriteFileInput](raw)
 		if err != nil {
 			return "", err
@@ -126,11 +129,11 @@ type EditFileInput struct {
 	NewStr string `json:"new_str" jsonschema_description:"Replacement text."`
 }
 
-var EditFileDefinition = ToolDefinition{
+var EditFile = Definition{
 	Name:        "edit_file",
 	Description: "Replace one exact, unique occurrence of old_str with new_str in a file. Include enough surrounding lines to make old_str unique.",
 	InputSchema: GenerateSchema[EditFileInput](),
-	Function: func(ctx context.Context, ex Executor, raw json.RawMessage) (string, error) {
+	Function: func(ctx context.Context, ex executor.Executor, raw json.RawMessage) (string, error) {
 		in, err := decode[EditFileInput](raw)
 		if err != nil {
 			return "", err

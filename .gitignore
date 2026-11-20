@@ -1,8 +1,7 @@
 # build outputs
+/ultrared
+/bin/
 /chat
-/agent-harness
-/go-harness
-/harness
 *.wasm
 # agent transcripts
 *.jsonl
