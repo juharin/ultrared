@@ -1,6 +1,6 @@
 # CONTEXT: project state and handover notes
 
-*This file is a snapshot of the research and coding session on 12 Nov 2026, so the work can be resumed by you or by an AI assistant. Update it as you go.*
+*This file started as a snapshot of the research and coding session on 12 Nov 2026, so the work can be resumed by you or by an AI assistant. Last updated 20 Nov 2026. Update it as you go.*
 
 ## Goal
 Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by building one in Go. The long-term target architecture is **client–server**:
@@ -29,7 +29,10 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
    - approvals, JSONL log, AGENTS.md loading
    - Ctrl-C cancels the running turn only (`interrupt.go`); at the prompt it prints a hint, and ctrl-d quits so cleanup runs
    - tests
+   
+   As of 20 Nov 2026, `go test ./...` passes on macOS too, including the Docker executor test.
 3. **Experiment.** `experiments/wasm`: wazero ran a Go-built WASI guest with a read-only mount. Instantiation took ~10 ms; the host filesystem was invisible to the guest.
+4. **Published** to `github.com/juharin/ultrared` as `origin`, with `main` as the default branch. The upstream workshop repo (`ghuntley/how-to-build-a-coding-agent`) is not configured as a remote. The local `harness` branch points at the same commit as `main` and was never pushed; delete it or keep it, it holds nothing extra.
 
 ## Key design decisions (and why)
 | Decision | Why | Revisit if… |
@@ -42,7 +45,7 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
 | Loop outside the container | Anthropic's lessons: debuggability, lazy provisioning, credentials kept out of the sandbox | — |
 
 ## Known limitations / TODO (rough priority)
-- [ ] **Publish to your own GitHub repo with `main` as the default branch.** `origin` is still the upstream workshop repo (`ghuntley/how-to-build-a-coding-agent`, read-only, default branch `trunk`). The local branch is already renamed `trunk` → `main` and tracks `origin/trunk`. When publishing: rename `origin` to `upstream`, add your repo as `origin`, then `git push -u origin main harness`.
+- [x] Publish to your own GitHub repo with `main` as the default branch (see "What has been done", item 4).
 - [ ] **Run against the real API on the Mac** and fix whatever breaks. Watch: prompt caching (not enabled), `max_tokens` stop reason, very long outputs.
 - [ ] Context management: no compaction yet. Add token counting (`usage` from responses) and threshold compaction (doc 02, Rec. 7).
 - [ ] Streaming responses (`client.Messages.NewStreaming`) for a responsive UI.

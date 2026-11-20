@@ -75,9 +75,8 @@ experiments/wasm/  wazero WASI sandbox experiment (separate Go module)
 
 ## Status
 - **Tested:**
-  - `go test ./...` against a fake API: loop, tool results, edit errors, and the Docker executor
+  - `go test ./...` against a fake API: loop, tool results, edit errors, Ctrl-C handling, and the Docker executor. Passes on Linux and macOS
   - the WASM experiment
 - **Not yet tested:**
   - the real Anthropic API (first thing to try on your Mac)
   - gVisor
-  - macOS specifically: tests were run on Linux
