@@ -1,6 +1,6 @@
-# agent-harness: a coding-agent harness in Go, built to learn
+# ultrared: a coding-agent harness in Go, built to learn
 
-This started as a small chat loop (`main.go`/`config.go`). It is now a working coding agent:
+This started as a small chat loop (the workshop's `main.go`). It is now a working coding agent:
 - the model calls tools, the harness runs them, feeds the results back, and repeats
 - tools can run on the host, or inside a locked-down Docker container
 
@@ -18,8 +18,10 @@ go test ./...                      # end-to-end test against a fake API; no key 
                                    # (the Docker test runs only if Docker is up)
 
 export ANTHROPIC_API_KEY=sk-ant-...
-go run . -dir ~/src/some-repo -docker golang:1.24      # recommended: tools run in a container
-go run . -dir ~/src/some-repo                          # tools run directly on your Mac (no sandbox!)
+go run ./cmd/ultrared -dir ~/src/some-repo -docker golang:1.24   # recommended: tools run in a container
+go run ./cmd/ultrared -dir ~/src/some-repo                       # tools run directly on your Mac (no sandbox!)
+
+go install ./cmd/ultrared          # or install the binary as `ultrared`
 ```
 
 | Flag | Default | Meaning |
@@ -29,7 +31,7 @@ go run . -dir ~/src/some-repo                          # tools run directly on y
 | `-net` | off | Give the container network access |
 | `-runtime` | (none) | Container runtime, e.g. `runsc` (gVisor). **Linux hosts only; not available on macOS** |
 | `-yolo` | off | Don't ask before `bash` / `write_file` / `edit_file` |
-| `-model` | Sonnet 5.5 | Model id, e.g. `claude-opus-5-5` (see `config.go`) |
+| `-model` | Sonnet 5.5 | Model id, e.g. `claude-opus-5-5` (see `internal/agent/config.go`) |
 | `-log FILE` | (none) | Append a JSONL transcript of every turn |
 
 **macOS notes:**
@@ -40,14 +42,14 @@ go run . -dir ~/src/some-repo                          # tools run directly on y
 ## Layout
 
 ```
-main.go            CLI: flags, approval prompt, terminal rendering
-interrupt.go       Ctrl-C cancels only the running turn (per-turn context)
-agent.go           the loop: infer → run tools → feed results back → until no tool calls
-tools.go           bash, read_file, write_file, edit_file (+ GenerateSchema with Required)
-executor.go        Executor interface ("hands"): LocalExecutor, DockerExecutor
-config.go          default model
-agent_test.go      end-to-end tests with an httptest fake of the Anthropic API
-AGENTS.md          instructions for coding agents working on this repo (incl. this one)
+cmd/ultrared/          the CLI: flags, approval prompt, terminal rendering
+  interrupt.go         Ctrl-C cancels only the running turn (per-turn context)
+internal/agent/        the loop ("brain"): infer → run tools → feed results back → until no tool calls
+  config.go            default model
+  agent_test.go        end-to-end tests with an httptest fake of the Anthropic API
+internal/tools/        bash, read_file, write_file, edit_file (+ GenerateSchema with Required)
+internal/executor/     Executor interface ("hands"): Local, Docker
+AGENTS.md              instructions for coding agents working on this repo (incl. this one)
 CONTEXT.md         project state, decisions, roadmap: start here when resuming
 docs/              research reports (read in order; see below)
 experiments/wasm/  wazero WASI sandbox experiment (separate Go module)

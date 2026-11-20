@@ -1,8 +1,8 @@
-package main
+package agent
 
 // End-to-end test of the agent loop against a fake Anthropic API (httptest).
 // No API key or network needed:   go test ./...
-// The Docker variant runs only if Docker is available: go test -run Docker ./...
+// The Docker variant runs only if Docker is available: go test -run Docker ./internal/agent
 
 import (
 	"context"
@@ -19,6 +19,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/juharin/ultrared/internal/executor"
+	"github.com/juharin/ultrared/internal/tools"
 )
 
 // fakeAnthropic scripts three model turns: edit_file, then bash, then a final answer.
@@ -80,11 +82,11 @@ func fakeAnthropic(t *testing.T) *httptest.Server {
 	}))
 }
 
-func runScenario(t *testing.T, ex Executor, dir string) {
+func runScenario(t *testing.T, ex executor.Executor, dir string) {
 	srv := fakeAnthropic(t)
 	defer srv.Close()
 	client := anthropic.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test"))
-	a := &Agent{client: &client, model: DefaultModel, exec: ex, tools: Tools(), maxTurns: 10}
+	a := &Agent{Client: &client, Model: DefaultModel, Exec: ex, Tools: tools.All(), MaxTurns: 10}
 	var texts []string
 	err := a.Send(context.Background(), "set x to 2", func(kind, s string) {
 		if kind == "text" {
@@ -106,7 +108,7 @@ func runScenario(t *testing.T, ex Executor, dir string) {
 func TestLoopLocal(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x = 1\n"), 0o644)
-	runScenario(t, &LocalExecutor{Root: dir}, dir)
+	runScenario(t, &executor.Local{Root: dir}, dir)
 }
 
 func TestLoopDocker(t *testing.T) {
@@ -115,26 +117,10 @@ func TestLoopDocker(t *testing.T) {
 	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x = 1\n"), 0o644)
-	d, err := NewDockerExecutor(context.Background(), "alpine:3.20", dir, "", false)
+	d, err := executor.NewDocker(context.Background(), "alpine:3.20", dir, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
 	runScenario(t, d, dir)
-}
-
-func TestEditFileErrors(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("a a"), 0o644)
-	ex := &LocalExecutor{Root: dir}
-	in, _ := json.Marshal(EditFileInput{Path: "f.txt", OldStr: "a", NewStr: "b"})
-	if _, err := EditFileDefinition.Function(context.Background(), ex, in); err == nil ||
-		!strings.Contains(err.Error(), "2 times") {
-		t.Fatalf("expected ambiguity error, got %v", err)
-	}
-	in, _ = json.Marshal(EditFileInput{Path: "f.txt", OldStr: "zzz", NewStr: "b"})
-	if _, err := EditFileDefinition.Function(context.Background(), ex, in); err == nil ||
-		!strings.Contains(err.Error(), "not found") {
-		t.Fatalf("expected not-found error, got %v", err)
-	}
 }

@@ -1,4 +1,4 @@
-module chat
+module github.com/juharin/ultrared
 
 go 1.24.2
 
