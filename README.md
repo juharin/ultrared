@@ -1,335 +1,82 @@
-# 🧠 Build Your Own Coding Agent via a Step-by-Step Workshop
+# agent-harness: a coding-agent harness in Go, built to learn
 
-Welcome! 👋 This workshop will guide you through building your own **AI-powered coding assistant** — starting from a basic chatbot, and adding powerful tools like file reading, shell command execution, and code searching.
+This started as a small chat loop (`main.go`/`config.go`). It is now a working coding agent:
+- the model calls tools, the harness runs them, feeds the results back, and repeats
+- tools can run on the host, or inside a locked-down Docker container
 
-You don’t need to be an AI expert. Just follow along and build step-by-step!
+`docs/` holds the research behind it.
 
-🌐 **Want a detailed overview?** Check out the blog post: [ghuntley.com/agent](https://ghuntley.com/agent/)
-
----
-
-## 🎯 What You'll Learn
-
-By the end of this workshop, you’ll understand how to:
-
-- ✅ Connect to the Anthropic Claude API
-- ✅ Build a simple AI chatbot
-- ✅ Add tools like reading files, editing code, and running commands
-- ✅ Handle tool requests and errors
-- ✅ Build an agent that gets smarter with each step
+> **Read `CONTEXT.md` next.** It records where the project stands, the decisions made and why, and what to do next.
 
 ---
 
-## 🛠️ What We're Building
+## Quick start (macOS)
 
-You’ll build 6 versions of a coding assistant. 
+```sh
+# prerequisites: Go ≥ 1.24 and Docker Desktop (or OrbStack / colima)
+go test ./...                      # end-to-end test against a fake API; no key needed
+                                   # (the Docker test runs only if Docker is up)
 
-Each version adds more features:
-
-1. **Basic Chat** — talk to Claude
-2. **File Reader** — read code files
-3. **File Explorer** — list files in folders
-4. **Command Runner** — run shell commands
-5. **File Editor** — modify files
-6. **Code Search** — search your codebase with patterns
-
-```mermaid
-graph LR
-    subgraph "Application Progression"
-        A[chat.go<br/>Basic Chat] --> B[read.go<br/>+ File Reading]
-        B --> C[list_files.go<br/>+ Directory Listing]
-        C --> D[bash_tool.go<br/>+ Shell Commands]
-        D --> E[edit_tool.go<br/>+ File Editing]
-        E --> F[code_search_tool.go<br/>+ Code Search]
-    end
-    
-    subgraph "Tool Capabilities"
-        G[No Tools] --> H[read_file]
-        H --> I[read_file<br/>list_files]
-        I --> J[read_file<br/>list_files<br/>bash]
-        J --> K[read_file<br/>list_files<br/>bash<br/>edit_file]
-        K --> L[read_file<br/>list_files<br/>bash<br/>code_search]
-    end
-    
-    A -.-> G
-    B -.-> H
-    C -.-> I
-    D -.-> J
-    E -.-> K
-    F -.-> L
+export ANTHROPIC_API_KEY=sk-ant-...
+go run . -dir ~/src/some-repo -docker golang:1.24      # recommended: tools run in a container
+go run . -dir ~/src/some-repo                          # tools run directly on your Mac (no sandbox!)
 ```
 
-At the end, you’ll end up with a powerful local developer assistant!
+| Flag | Default | Meaning |
+|---|---|---|
+| `-dir` | `.` | Workspace the agent works on (bind-mounted at `/workspace` in Docker mode) |
+| `-docker IMAGE` | (none) | Run tools in a container from IMAGE. Use an image that has your toolchain |
+| `-net` | off | Give the container network access |
+| `-runtime` | (none) | Container runtime, e.g. `runsc` (gVisor). **Linux hosts only; not available on macOS** |
+| `-yolo` | off | Don't ask before `bash` / `write_file` / `edit_file` |
+| `-model` | Sonnet 5.5 | Model id, e.g. `claude-opus-5-5` (see `config.go`) |
+| `-log FILE` | (none) | Append a JSONL transcript of every turn |
 
+**macOS notes:**
+- Docker Desktop runs containers inside a Linux VM, so bind-mounted file I/O and `docker exec` are slower than on Linux. That is fine for learning.
+- File ownership mapping (`--user uid:gid`) is handled by Docker Desktop.
+- gVisor needs a Linux host. To try it, use a Linux VM or a cloud box.
 
+## Layout
 
----
-
-## 🧱 How It Works (Architecture)
-
-Each agent works like this:
-
-1. Waits for your input
-2. Sends it to Claude
-3. Claude may respond directly or ask to use a tool
-4. The agent runs the tool (e.g., read a file)
-5. Sends the result back to Claude
-6. Claude gives you the final answer
-
-We call this the **event loop** — it's like the agent's heartbeat.
-
-```mermaid
-graph TB
-    subgraph "Agent Architecture"
-        A[Agent] --> B[Anthropic Client]
-        A --> C[Tool Registry]
-        A --> D[getUserMessage Function]
-        A --> E[Verbose Logging]
-    end
-    
-    subgraph "Shared Event Loop"
-        F[Start Chat Session] --> G[Get User Input]
-        G --> H{Empty Input?}
-        H -->|Yes| G
-        H -->|No| I[Add to Conversation]
-        I --> J[runInference]
-        J --> K[Claude Response]
-        K --> L{Tool Use?}
-        L -->|No| M[Display Text]
-        L -->|Yes| N[Execute Tools]
-        N --> O[Collect Results]
-        O --> P[Send Results to Claude]
-        P --> J
-        M --> G
-    end
-    
-    subgraph "Tool Execution Loop"
-        N --> Q[Find Tool by Name]
-        Q --> R[Execute Tool Function]
-        R --> S[Capture Result/Error]
-        S --> T[Add to Tool Results]
-        T --> U{More Tools?}
-        U -->|Yes| Q
-        U -->|No| O
-    end
+```
+main.go            CLI: flags, approval prompt, terminal rendering
+agent.go           the loop: infer → run tools → feed results back → until no tool calls
+tools.go           bash, read_file, write_file, edit_file (+ GenerateSchema with Required)
+executor.go        Executor interface ("hands"): LocalExecutor, DockerExecutor
+config.go          default model
+agent_test.go      end-to-end tests with an httptest fake of the Anthropic API
+AGENTS.md          instructions for coding agents working on this repo (incl. this one)
+CONTEXT.md         project state, decisions, roadmap: start here when resuming
+docs/              research reports (read in order; see below)
+experiments/wasm/  wazero WASI sandbox experiment (separate Go module)
 ```
 
-## 🚀 Getting Started
-
-### ✅ Prerequisites
-
-* Go 1.24.2+ or [devenv](https://devenv.sh/) (recommended for easy setup)
-* An [Anthropic API Key](https://www.anthropic.com/product/claude)
-
-### 🔧 Set Up Your Environment
-
-**Option 1: Recommended (using devenv)**
-
-```bash
-devenv shell  # Loads everything you need
-```
-
-**Option 2: Manual setup**
-
-```bash
-# Make sure Go is installed
-go mod tidy
-```
-
-### 🔐 Add Your API Key
-
-```bash
-export ANTHROPIC_API_KEY="your-api-key-here"
-```
-
----
-
-## 🏁 Start with the Basics
-
-### 1. `chat.go` — Basic Chat
-
-A simple chatbot that talks to Claude.
-
-```bash
-go run chat.go
-```
-
-* ➡️ Try: “Hello!”
-* ➡️ Add `--verbose` to see detailed logs
-
----
-
-## 🛠️ Add Tools (One Step at a Time)
-
-### 2. `read.go` — Read Files
-
-Now Claude can read files from your computer.
-
-```bash
-go run read.go
-```
-
-* ➡️ Try: “Read fizzbuzz.js”
-
----
-
-### 3. `list_files.go` — Explore Folders
-
-Lets Claude look around your directory.
-
-```bash
-go run list_files.go
-```
-
-* ➡️ Try: “List all files in this folder”
-* ➡️ Try: “What’s in fizzbuzz.js?”
-
----
-
-### 4. `bash_tool.go` — Run Shell Commands
-
-Allows Claude to run safe terminal commands.
-
-```bash
-go run bash_tool.go
-```
-
-* ➡️ Try: “Run git status”
-* ➡️ Try: “List all .go files using bash”
-
----
-
-### 5. `edit_tool.go` — Edit Files
-
-Claude can now **modify code**, create files, and make changes.
-
-```bash
-go run edit_tool.go
-```
-
-* ➡️ Try: “Create a Python hello world script”
-* ➡️ Try: “Add a comment to the top of fizzbuzz.js”
-
----
-
-### 6. `code_search_tool.go` — Search Code
-
-Use pattern search (powered by [ripgrep](https://github.com/BurntSushi/ripgrep)).
-
-```bash
-go run code_search_tool.go
-```
-
-* ➡️ Try: “Find all function definitions in Go files”
-* ➡️ Try: “Search for TODO comments”
-
----
-
-## 🧪 Sample Files (Already Included)
-
-1. `fizzbuzz.js`: for file reading and editing
-1. `riddle.txt`: a fun text file to explore
-1. `AGENT.md`: info about the project environment
-
----
-
-## 🐞 Troubleshooting
-
-**API key not working?**
-
-* Make sure it’s exported: `echo $ANTHROPIC_API_KEY`
-* Check your quota on [Anthropic’s dashboard](https://www.anthropic.com)
-
-**Go errors?**
-
-* Run `go mod tidy`
-* Make sure you’re using Go 1.24.2 or later
-
-**Tool errors?**
-
-* Use `--verbose` for full error logs
-* Check file paths and permissions
-
-**Environment issues?**
-
-* Use `devenv shell` to avoid config problems
-
----
-
-## 💡 How Tools Work (Under the Hood)
-
-Tools are like plugins. You define:
-
-* **Name** (e.g., `read_file`)
-* **Input Schema** (what info it needs)
-* **Function** (what it does)
-
-Example tool definition in Go:
-
-```go
-var ToolDefinition = ToolDefinition{
-    Name:        "read_file",
-    Description: "Reads the contents of a file",
-    InputSchema: GenerateSchema[ReadFileInput](),
-    Function:    ReadFile,
-}
-```
-
-Schema generation uses Go structs — so it’s easy to define and reuse.
-
----
-
-## 🧭 Workshop Path: Learn by Building
-
-| Phase | What to Focus On                                 |
-| ----- | ------------------------------------------------ |
-| **1** | `chat.go`: API integration and response handling |
-| **2** | `read.go`: Tool system, schema generation        |
-| **3** | `list_files.go`: Multiple tools, file system     |
-| **4** | `bash_tool.go`: Shell execution, error capture   |
-| **5** | `edit_tool.go`: File editing, safety checks      |
-| **6** | `code_search_tool.go`: Pattern search, ripgrep   |
-
----
-
-## 🛠️ Developer Environment (Optional)
-
-If you use [`devenv`](https://devenv.sh/), it gives you:
-
-* Go, Node, Python, Rust, .NET
-* Git and other dev tools
-
-```bash
-devenv shell   # Load everything
-devenv test    # Run checks
-hello          # Greeting script
-```
-
----
-
-## 🚀 What's Next?
-
-Once you complete the workshop, try building:
-
-* Custom tools (e.g., API caller, web scraper)
-* Tool chains (run tools in a sequence)
-* Memory features (remember things across sessions)
-* A web UI for your agent
-* Integration with other AI models
-
----
-
-## 📦 Summary
-
-This workshop helps you:
-
-* Understand agent architecture
-* Learn to build smart assistants
-* Grow capabilities step-by-step
-* Practice using Claude and Go together
-
----
-
-Have fun exploring and building your own AI-powered tools! 💻✨
-
-If you have questions or ideas, feel free to fork the repo, open issues, or connect with the community!
+## Learning path: the docs
+
+| # | Doc | What you learn |
+|---|---|---|
+| 01 | `docs/01-landscape-report.md` | The field: Claude Code, Codex, OpenCode, Pi; how to classify them; where they're heading; benchmark evidence (Terminal-Bench 4.1, Databricks) |
+| 02 | `docs/02-how-harnesses-work.md` | Anatomy (7 subsystems), concrete differences between the big four, and a step-by-step build path |
+| 03 | `docs/03-architecture-client-server.md` | Local vs. client–server; Anthropic's "brain / hands / session" split; sandbox options; why Go; what changed in your code |
+| 04 | `docs/04-wasm-evaluation.md` | Honest evaluation of WASM as the execution sandbox (verdict: not as the main executor; yes for code mode and plugins) |
+
+**Primary sources worth reading in full:**
+- Barbaste et al., *Harness Engineering* (source-code study of 11 harnesses), arXiv:2609.00006, https://arxiv.org/html/2609.00006v1. §16 is a practitioner's guide.
+- Anthropic Engineering, *Scaling Managed Agents: Decoupling the brain from the hands*, https://www.anthropic.com/engineering/managed-agents
+- Mario Zechner, *What I learned building an opinionated and minimal coding agent* (Pi), https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
+- Databricks, *Benchmarking Coding Agents on Databricks' Multi-Million Line Codebase*, https://www.databricks.com/blog/benchmarking-coding-agents-databricks-multi-million-line-codebase
+
+**Code to read:**
+- mini-swe-agent: the ~100-line floor
+- Pi: the minimal production harness
+- **Crush** (`charmbracelet/crush`): a production coding agent in Go
+
+## Status
+- **Tested:**
+  - `go test ./...` against a fake API: loop, tool results, edit errors, and the Docker executor
+  - the WASM experiment
+- **Not yet tested:**
+  - the real Anthropic API (first thing to try on your Mac)
+  - gVisor
+  - macOS specifically: tests were run on Linux
