@@ -30,8 +30,7 @@ func main() {
 	logPath := flag.String("log", "", "append a JSONL transcript here")
 	flag.Parse()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	ctx := context.Background()
 
 	var ex Executor = &LocalExecutor{Root: *dir}
 	if *image != "" {
@@ -90,7 +89,21 @@ func main() {
 		}
 	}
 
-	fmt.Println("Chat with Claude (ctrl-d to quit)")
+	// Ctrl-C stops the running turn. At the prompt it only prints a hint, so the
+	// deferred cleanup (e.g. removing the container) still runs on ctrl-d.
+	var intr interrupter
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	defer signal.Stop(sigs)
+	go func() {
+		for range sigs {
+			if !intr.interrupt() {
+				fmt.Print("\n(ctrl-d to quit)\n\033[34mYou\033[0m: ")
+			}
+		}
+	}()
+
+	fmt.Println("Chat with Claude (ctrl-c stops a turn, ctrl-d quits)")
 	for {
 		fmt.Print("\033[34mYou\033[0m: ")
 		in, ok := readLine()
@@ -100,7 +113,10 @@ func main() {
 		if strings.TrimSpace(in) == "" {
 			continue
 		}
-		if err := agent.Send(ctx, in, emit); err != nil {
+		turnCtx, done := intr.turn(ctx)
+		err := agent.Send(turnCtx, in, emit)
+		done()
+		if err != nil {
 			fmt.Printf("Error: %s\n", err)
 		}
 	}

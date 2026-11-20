@@ -41,6 +41,7 @@ go run . -dir ~/src/some-repo                          # tools run directly on y
 
 ```
 main.go            CLI: flags, approval prompt, terminal rendering
+interrupt.go       Ctrl-C cancels only the running turn (per-turn context)
 agent.go           the loop: infer → run tools → feed results back → until no tool calls
 tools.go           bash, read_file, write_file, edit_file (+ GenerateSchema with Required)
 executor.go        Executor interface ("hands"): LocalExecutor, DockerExecutor
