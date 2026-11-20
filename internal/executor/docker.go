@@ -36,11 +36,20 @@ func NewDocker(ctx context.Context, image, hostDir, runtime string, network bool
 		args = append(args, "--runtime="+runtime)
 	}
 	args = append(args, image, "sleep", "infinity")
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("docker run: %v: %s", err, out)
+	// Only stdout carries the container ID. If the image has to be pulled
+	// first, docker prints the pull progress on stderr; mixing that in gave a
+	// garbage ID and every later `docker exec` failed with "page not found".
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("docker run: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return &Docker{ID: strings.TrimSpace(string(out)), Workdir: "/workspace"}, nil
+	id := strings.TrimSpace(stdout.String())
+	if id == "" {
+		return nil, fmt.Errorf("docker run printed no container ID: %s", strings.TrimSpace(stderr.String()))
+	}
+	return &Docker{ID: id, Workdir: "/workspace"}, nil
 }
 
 func (d *Docker) exec(ctx context.Context, stdin []byte, argv ...string) ([]byte, int, error) {
