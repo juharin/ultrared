@@ -36,7 +36,7 @@ task run -- -yolo                  # pass CLI flags after --
 
 **How `task run` works:**
 - It loads `.env`, builds the `ultrared-sandbox` image if it's missing or `sandbox/Dockerfile` changed, and runs `go run ./cmd/ultrared -docker ultrared-sandbox`.
-- The default workspace is `.tmp/workspace`, and transcripts go to `.tmp/logs/`. `.tmp/` is gitignored, and Go tooling skips it because its name starts with a dot, so agent-written code never mixes with the project's.
+- The default workspace is `.tmp/workspace`, and event logs go to `.tmp/logs/` (one JSON event per line). `.tmp/` is gitignored, and Go tooling skips it because its name starts with a dot, so agent-written code never mixes with the project's.
 - The sandbox image has Go, git and ripgrep. The container has no network unless you pass `-net`, so `go test` in a workspace whose modules aren't downloaded yet needs `task run -- -net`.
 - Ctrl-C stops the running turn, as without Task. Pressing it three times quickly makes Task itself exit.
 
@@ -55,7 +55,7 @@ go install ./cmd/ultrared                                             # install 
 | `-runtime` | (none) | Container runtime, e.g. `runsc` (gVisor). **Linux hosts only; not available on macOS** |
 | `-yolo` | off | Don't ask before `bash` / `write_file` / `edit_file` |
 | `-model` | Sonnet 5.5 | Model id, e.g. `claude-opus-5-5` (see `internal/agent/config.go`) |
-| `-log FILE` | (none) | Append a JSONL transcript of every turn |
+| `-log FILE` | (none) | Append the session's events to FILE, one JSON object per line (see `internal/session/event.go`) |
 
 **macOS notes:**
 - Docker Desktop runs containers inside a Linux VM, so bind-mounted file I/O and `docker exec` are slower than on Linux. That is fine for learning.
@@ -72,6 +72,7 @@ internal/agent/        the loop ("brain"): infer → run tools → feed results 
   agent_test.go        end-to-end tests with an httptest fake of the Anthropic API
 internal/tools/        bash, read_file, write_file, edit_file (+ GenerateSchema with Required)
 internal/executor/     Executor interface ("hands"): Local, Docker
+internal/session/      session events: the only way the loop talks to clients
 sandbox/Dockerfile     the image tools run in (Go, git, ripgrep)
 Taskfile.yml           dev tasks (`task` lists them)
 .env.example           settings for `task run`; copy to .env

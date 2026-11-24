@@ -10,6 +10,7 @@ A coding-agent harness in Go, built for learning. Read `CONTEXT.md` for the curr
 - `internal/agent/`: the loop ("brain").
 - `internal/tools/`: tool definitions.
 - `internal/executor/`: the `Executor` interface ("hands") with `Local` and `Docker` implementations.
+- `internal/session/`: the events a session produces (`Event`, one type per kind of event).
 
 ## Commands
 Dev tasks live in `Taskfile.yml` (`task` lists them). Before finishing a change, run `task check` and make sure it passes; CI runs the same.
@@ -27,7 +28,7 @@ Scratch output (workspaces, transcripts) belongs in `.tmp/`, never in the source
 ## Conventions
 - Standard library first. Current dependencies are `anthropic-sdk-go` and `invopop/jsonschema`. Ask before adding more, including dev tools pinned in `go.mod`.
 - All side effects go through the `Executor` interface (`internal/executor/`). Tools must never call `os`/`exec` directly.
-- `internal/agent` must not read stdin or print. It reports through callbacks (later: events), so that every client (CLI now, desktop and mobile later) can drive it.
+- `internal/agent` must not read stdin or print. It reports everything as `session.Event`s through `Agent.Emit`, and approvals are `approval_requested` events answered with `Agent.Resolve`, so that every client (CLI now, desktop and mobile later) can drive it. A new kind of thing the loop reports needs a new event type in `internal/session/`, not a new callback.
 - Tool errors are returned as `error` and become `is_error` tool results. Never `panic` in a tool.
 - New tools need a tests-first case in `internal/tools/tools_test.go` or `internal/agent/agent_test.go`.
 - Keep `CONTEXT.md` updated when a TODO is done or a design decision changes.

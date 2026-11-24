@@ -1,8 +1,11 @@
 // A minimal coding-agent harness in Go, grown from your original main.go.
 //
-//	go run ./cmd/ultrared -dir ./myrepo                     # tools run on the host (no isolation!)
-//	go run ./cmd/ultrared -dir ./myrepo -docker golang:1.24 # tools run in a locked-down container
-//	go run ./cmd/ultrared -dir ./myrepo -docker golang:1.24 -runtime runsc   # + gVisor
+//	go run ./cmd/ultrared -dir ./myrepo                             # tools run on the host (no isolation!)
+//	go run ./cmd/ultrared -dir ./myrepo -docker ultrared-sandbox    # tools run in a locked-down container
+//	go run ./cmd/ultrared -dir ./myrepo -docker ultrared-sandbox -runtime runsc   # + gVisor
+//	go run ./cmd/ultrared -dir ./myrepo -log events.jsonl           # also write the session's events
+//
+// Day to day, `task run` does this for you (see Taskfile.yml).
 //
 // Needs ANTHROPIC_API_KEY. ANTHROPIC_BASE_URL is honoured too.
 package main
@@ -10,16 +13,20 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/juharin/ultrared/internal/agent"
 	"github.com/juharin/ultrared/internal/executor"
+	"github.com/juharin/ultrared/internal/session"
 	"github.com/juharin/ultrared/internal/tools"
 )
 
@@ -30,10 +37,23 @@ func main() {
 	network := flag.Bool("net", false, "give the container network access")
 	yolo := flag.Bool("yolo", false, "do not ask before bash/write/edit")
 	model := flag.String("model", string(agent.DefaultModel), "model id")
-	logPath := flag.String("log", "", "append a JSONL transcript here")
+	logPath := flag.String("log", "", "append the session's events here, one JSON object per line")
 	flag.Parse()
 
 	ctx := context.Background()
+
+	// The event log: one JSON event per line, the same events any client sees.
+	// Opened before the container starts, so a bad path can't leak a container.
+	var eventLog *json.Encoder
+	if *logPath != "" {
+		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "event log:", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		eventLog = json.NewEncoder(f)
+	}
 
 	var ex executor.Executor = &executor.Local{Root: *dir}
 	if *image != "" {
@@ -61,34 +81,26 @@ func main() {
 	client := anthropic.NewClient()
 	ag := &agent.Agent{
 		Client: &client, Model: anthropic.Model(*model), Exec: ex,
-		Tools: tools.All(), MaxTurns: 60,
-	}
-	if *logPath != "" {
-		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		if err == nil {
-			ag.Log = f
-			defer f.Close()
-		}
+		Tools: tools.All(), MaxTurns: 60, SessionID: newSessionID(),
 	}
 	if !*yolo {
-		ag.Approve = func(name string, input json.RawMessage) bool {
-			if name == "read_file" {
-				return true
-			}
-			fmt.Printf("\033[31mallow\033[0m %s %s ? [y/N] ", name, truncate(string(input), 300))
-			ans, _ := readLine()
-			return strings.TrimSpace(strings.ToLower(ans)) == "y"
-		}
+		ag.NeedsApproval = func(name string, _ json.RawMessage) bool { return name != "read_file" }
 	}
 
-	emit := func(kind, text string) {
-		switch kind {
-		case "text":
-			fmt.Printf("\033[33mClaude\033[0m: %s\n", text)
-		case "tool":
-			fmt.Printf("\033[36m→ %s\033[0m\n", text)
-		case "result":
-			fmt.Printf("\033[90m  %s\033[0m\n", strings.ReplaceAll(text, "\n", "⏎"))
+	// The CLI is a client of the agent's event stream: it logs and renders
+	// every event, and answers approval requests from the keyboard.
+	ag.Emit = func(e session.Event) {
+		if eventLog != nil {
+			if err := eventLog.Encode(e); err != nil {
+				fmt.Fprintln(os.Stderr, "event log:", err)
+			}
+		}
+		render(e)
+		if e.Type == session.ApprovalRequested {
+			// The tool_call line just above shows the input.
+			fmt.Printf("  \033[31mallow\033[0m %s? [y/N] ", e.Tool)
+			ans, _ := readLine()
+			ag.Resolve(e.ToolUseID, strings.TrimSpace(strings.ToLower(ans)) == "y")
 		}
 	}
 
@@ -106,7 +118,7 @@ func main() {
 		}
 	}()
 
-	fmt.Println("Chat with Claude (ctrl-c stops a turn, ctrl-d quits)")
+	fmt.Printf("Session %s. Chat with Claude (ctrl-c stops a turn, ctrl-d quits)\n", ag.SessionID)
 	for {
 		fmt.Print("\033[34mYou\033[0m: ")
 		in, ok := readLine()
@@ -117,12 +129,35 @@ func main() {
 			continue
 		}
 		turnCtx, done := intr.turn(ctx)
-		err := ag.Send(turnCtx, in, emit)
+		err := ag.Send(turnCtx, in)
 		done()
 		if err != nil {
 			fmt.Printf("Error: %s\n", err)
 		}
 	}
+}
+
+// render prints the events a person wants to see. user_message is what they
+// just typed, and approval_resolved is their own answer, so both are skipped;
+// turn_done errors are printed by the prompt loop.
+func render(e session.Event) {
+	switch e.Type {
+	case session.AssistantText:
+		fmt.Printf("\033[33mClaude\033[0m: %s\n", e.Text)
+	case session.ToolCall:
+		fmt.Printf("\033[36m→ %s %s\033[0m\n", e.Tool, truncate(string(e.Input), 300))
+	case session.ToolResult:
+		fmt.Printf("\033[90m  %s\033[0m\n", strings.ReplaceAll(truncate(e.Output, 200), "\n", "⏎"))
+	}
+}
+
+// newSessionID returns a short random id, e.g. "3f9a1c0b2d4e".
+func newSessionID() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 func truncate(s string, n int) string {
