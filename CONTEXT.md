@@ -58,7 +58,7 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
 - [x] Project layout: `cmd/` + `internal/`, module `github.com/juharin/ultrared`.
 - [x] **Dev loop:** `Taskfile.yml` (`check`, `test-all`, `build`, `run`, `sandbox`, …), the sandbox image `sandbox/Dockerfile` (Go, git, ripgrep), `.env.example`, and a gitignored `.tmp/` for scratch workspaces and logs. The Docker test skips under `-short`.
 - [x] **CI:** `.github/workflows/ci.yml` runs `task check`, `task test-all` (with Docker), `task wasm:check` and `task vuln` on PRs and pushes to `main`. Dependabot covers Go modules, Actions and the sandbox image.
-- [ ] **Branch protection** on `main`: require the CI checks to pass (a GitHub setting, not a file).
+- [x] **Branch protection** on `main` (a GitHub setting, turned on 24 Nov 2026): the "Check and test" CI job must pass before merging. Not required: the vulnerability check (a new advisory would otherwise block unrelated PRs), reviews (single maintainer), an up-to-date branch. Admins can bypass. Force pushes and deleting `main` are blocked.
 - [ ] Live-API smoke test: a manually triggered workflow with the API key as a secret, behind a `live` build tag.
 - [ ] **Run against the real API on the Mac** and fix whatever breaks. Watch: prompt caching (not enabled), `max_tokens` stop reason, very long outputs.
 - [ ] **Event seam:** replace the `emit`/`approve` callbacks with typed session events and asynchronous approvals; the CLI renders events. Then rebuild the conversation from the JSONL/SQLite event log and add `resume <session>`. This is the first step toward client–server and the desktop app.
