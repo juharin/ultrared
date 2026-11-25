@@ -33,7 +33,7 @@ Scratch output (workspaces, transcripts) belongs in `.tmp/`, never in the source
 - Keep `CONTEXT.md` updated when a TODO is done or a design decision changes.
 
 ## Pull request reviews
-Every push to a non-draft pull request gets an automated Codex review, posted as a PR comment (`.github/workflows/codex-review.yml`). When you work on a PR, read those comments, but verify each finding before acting on it; the reviewer can be wrong.
+Every push to a non-draft pull request gets an automated Codex review, posted as a PR comment (`.github/workflows/codex-review.yml`). The comment opens with a verdict: 🔴 Changes recommended, 🟡 Changes to consider, or 🟢 Approval recommended. When you work on a PR, read those comments, but verify each finding before acting on it; the reviewer can be wrong.
 
 ## Reviewing pull requests
 When you are the reviewer, report real problems only, most severe first:
@@ -42,3 +42,9 @@ When you are the reviewer, report real problems only, most severe first:
 - Docs that the change makes wrong: `README.md`, `CONTEXT.md` (a finished TODO or a changed decision not recorded), this file.
 
 Skip formatting (CI runs gofmt and `go vet`), style and naming.
+
+Give each finding a severity:
+- `must_fix`: merging as is would ship a bug, a security hole or a convention break listed above. Any `must_fix` finding makes the verdict "Changes recommended".
+- `consider`: a likely problem or a real risk that the author may reasonably accept, such as a missing edge-case test or a doc gap. Only `consider` findings make the verdict "Changes to consider".
+
+No findings means "Approval recommended". When unsure whether something is a problem at all, leave it out rather than marking it `consider`.
