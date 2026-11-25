@@ -472,22 +472,40 @@ func TestRestoreGroupsByStep(t *testing.T) {
 // A session that stopped after a tool call but before its result (a crash, or
 // waiting for an approval) gets an error result, so the history stays valid:
 // the API rejects a tool_use without a matching tool_result.
+// A tool call without a recorded result gets an error result, because the API
+// rejects a tool_use without one. What it says depends on what the log shows:
+// a tool still waiting for approval never ran, but any other tool may have run
+// and done its side effects before the session stopped.
 func TestRestoreFillsMissingToolResult(t *testing.T) {
-	events := []session.Event{
-		{Session: "s", Seq: 1, Type: session.UserMessage, Text: "go"},
-		{Session: "s", Seq: 2, Step: 1, Type: session.ToolCall, ToolUseID: "a", Tool: "bash", Input: json.RawMessage(`{}`)},
-		{Session: "s", Seq: 3, Step: 1, Type: session.ApprovalRequested, ToolUseID: "a", Tool: "bash"},
+	call := session.Event{Session: "s", Seq: 2, Step: 1, Type: session.ToolCall, ToolUseID: "a", Tool: "bash", Input: json.RawMessage(`{}`)}
+	approved := true
+	cases := []struct {
+		name  string
+		after []session.Event
+		want  string
+	}{
+		{"waiting for approval", []session.Event{
+			{Session: "s", Seq: 3, Step: 1, Type: session.ApprovalRequested, ToolUseID: "a", Tool: "bash"},
+		}, "did not run"},
+		{"approved, then stopped", []session.Event{
+			{Session: "s", Seq: 3, Step: 1, Type: session.ApprovalRequested, ToolUseID: "a", Tool: "bash"},
+			{Session: "s", Seq: 4, Step: 1, Type: session.ApprovalResolved, ToolUseID: "a", Tool: "bash", Approved: &approved},
+		}, "may have run"},
+		{"no approval needed", nil, "may have run"},
 	}
-	var a Agent
-	if err := a.Restore(events); err != nil {
-		t.Fatal(err)
-	}
-	if len(a.conversation) != 3 {
-		t.Fatalf("got %d messages, want user, assistant, user(tool_result)", len(a.conversation))
-	}
-	last := conversationJSON(t, &Agent{conversation: a.conversation[2:]})
-	if !strings.Contains(last, `"tool_use_id":"a"`) || !strings.Contains(last, `"is_error":true`) {
-		t.Fatalf("missing tool_result not filled in: %s", last)
+	for _, c := range cases {
+		events := append([]session.Event{{Session: "s", Seq: 1, Type: session.UserMessage, Text: "go"}, call}, c.after...)
+		var a Agent
+		if err := a.Restore(events); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if len(a.conversation) != 3 {
+			t.Fatalf("%s: got %d messages, want user, assistant, user(tool_result)", c.name, len(a.conversation))
+		}
+		last := conversationJSON(t, &Agent{conversation: a.conversation[2:]})
+		if !strings.Contains(last, `"tool_use_id":"a"`) || !strings.Contains(last, `"is_error":true`) || !strings.Contains(last, c.want) {
+			t.Errorf("%s: missing tool_result not filled in with %q: %s", c.name, c.want, last)
+		}
 	}
 }
 
