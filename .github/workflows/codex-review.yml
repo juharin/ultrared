@@ -62,9 +62,37 @@ jobs:
             "Reviewing pull requests" section of AGENTS.md.
 
             The sandbox is read-only and has no network, so do not build or run tests;
-            CI does that. Report only high-confidence findings, most severe first, each
-            with file:line and a concrete failure scenario. No style or naming nitpicks.
-            If you find nothing reliable, say so in one line.
+            CI does that. Report only high-confidence findings, most severe first. Give
+            each a severity as AGENTS.md defines it, the file and line, a one-line title,
+            and a body with a concrete failure scenario. No style or naming nitpicks.
+            Put a one or two sentence overall assessment in `summary`. If you find
+            nothing reliable, return no findings.
+          # The verdict in the comment is derived from the severities, so it always
+          # matches the findings.
+          output-schema: |
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["summary", "findings"],
+              "properties": {
+                "summary": { "type": "string" },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["severity", "file", "line", "title", "body"],
+                    "properties": {
+                      "severity": { "type": "string", "enum": ["must_fix", "consider"] },
+                      "file": { "type": "string" },
+                      "line": { "type": ["integer", "null"] },
+                      "title": { "type": "string" },
+                      "body": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
 
   comment:
     name: Post review comment
@@ -80,7 +108,29 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
-            const body = `**Codex review** of ${process.env.HEAD_SHA.slice(0, 7)}\n\n${process.env.REVIEW_BODY}`;
+            const sha = process.env.HEAD_SHA.slice(0, 7);
+            let body;
+            try {
+              const review = JSON.parse(process.env.REVIEW_BODY);
+              const findings = review.findings ?? [];
+              const mustFix = findings.filter(f => f.severity === 'must_fix');
+              const consider = findings.filter(f => f.severity !== 'must_fix');
+              const verdict =
+                mustFix.length ? '🔴 Changes recommended' :
+                consider.length ? '🟡 Changes to consider' :
+                '🟢 Approval recommended';
+              const section = (heading, list) => !list.length ? '' :
+                `\n\n**${heading}**\n\n` + list.map((f, i) => {
+                  const where = f.line ? `${f.file}:${f.line}` : f.file;
+                  const text = f.body.trim().split('\n').join('\n   ');
+                  return `${i + 1}. \`${where}\`: **${f.title}**\n   ${text}`;
+                }).join('\n');
+              body = `**Codex review** of ${sha}: **${verdict}**\n\n${review.summary}` +
+                section('Must fix', mustFix) + section('To consider', consider);
+            } catch (e) {
+              // Not the JSON the schema asks for: post it as it is.
+              body = `**Codex review** of ${sha}: **⚪ No verdict** (unexpected output format)\n\n${process.env.REVIEW_BODY}`;
+            }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
