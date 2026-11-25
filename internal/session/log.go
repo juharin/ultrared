@@ -30,23 +30,27 @@ func LogPath(dir, id string) (string, error) {
 // ReadLog reads an event log. A last line without a newline is dropped: that
 // is what a crash in the middle of writing an event leaves behind. Any other
 // line that isn't a valid event is an error.
-func ReadLog(r io.Reader) ([]Event, error) {
+//
+// size is the length in bytes of the complete lines. A writer that continues
+// the log must first truncate it to size, or its next event would be glued
+// to the torn line.
+func ReadLog(r io.Reader) (events []Event, size int64, err error) {
 	br := bufio.NewReader(r)
-	var events []Event
 	for n := 1; ; n++ {
 		line, err := br.ReadBytes('\n')
 		if errors.Is(err, io.EOF) {
-			return events, nil // a torn last line, or nothing left
+			return events, size, nil // a torn last line, or nothing left
 		}
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		size += int64(len(line))
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var e Event
 		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("event log line %d: %w", n, err)
+			return nil, 0, fmt.Errorf("event log line %d: %w", n, err)
 		}
 		events = append(events, e)
 	}

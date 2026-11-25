@@ -12,29 +12,35 @@ import (
 
 // openSessionLog prepares the event log of session id in dir, which the CLI
 // appends every event to. When resuming, it first reads the events already
-// there; the log must exist then.
+// there; the log must exist then. A torn last line, left by a crash while an
+// event was being written, is cut off so new events start on a fresh line.
 func openSessionLog(dir, id string, resuming bool) (*os.File, []session.Event, error) {
 	path, err := session.LogPath(dir, id)
 	if err != nil {
 		return nil, nil, err
 	}
-	var events []session.Event
-	if resuming {
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, nil, fmt.Errorf("resume: %w", err)
+	if !resuming {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, nil, err
 		}
-		events, err = session.ReadLog(f)
-		f.Close()
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
-			return nil, nil, fmt.Errorf("resume %s: %w", path, err)
+			return nil, nil, err
 		}
-	} else if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, nil, err
+		return f, nil, nil
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("resume: %w", err)
+	}
+	events, size, err := session.ReadLog(f)
+	if err == nil {
+		err = f.Truncate(size) // O_APPEND writes then go to the new end
+	}
+	if err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("resume %s: %w", path, err)
 	}
 	return f, events, nil
 }
