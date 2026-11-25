@@ -1,0 +1,67 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**/*.lock'
+      - '**/generated/**'
+      - '**/*.g.dart'
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch base and head refs for repo context
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin \
+            "$PR_BASE_REF" \
+            "+refs/pull/$PR_NUMBER/head"
+
+      - name: Run Codex review
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-6-luna
+          safety-strategy: drop-sudo
+          sandbox: read-only
+          prompt: |
+            Review Pull Request #${{ github.event.pull_request.number }} (${{ github.event.pull_request.title }}).
+            Inspect `git diff origin/${{ env.PR_BASE_REF }}...HEAD` and read surrounding repository files as needed to check types, callers, schemas, auth/security boundaries, and contracts.
+            Report ONLY high-confidence bugs, race conditions, security issues, and breaking contract mismatches.
+            Skip formatting, style, and minor naming nitpicks. If no reliable issue exists, say so briefly.
+
+      - name: Post review comment on PR
+        if: steps.codex.outputs.final-message != ''
+        uses: actions/github-script@v7
+        env:
+          REVIEW_BODY: ${{ steps.codex.outputs.final-message }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: process.env.REVIEW_BODY
+            });
