@@ -14,9 +14,11 @@ import (
 //
 // The events hold everything the history needs: user text, the model's text
 // and tool calls (grouped into messages by their step), and tool results. A
-// tool call without a recorded result (the session stopped while the tool ran
-// or waited for approval) gets an error result, because the API rejects a
-// tool_use that has no tool_result.
+// tool call without a recorded result gets an error result, because the API
+// rejects a tool_use that has no tool_result. If the session stopped while
+// the call waited for approval, the tool never ran. Otherwise it may have run
+// and done its side effects, with only its result lost, so the model is told
+// to check before running it again.
 func (a *Agent) Restore(events []session.Event) error {
 	if len(a.conversation) > 0 {
 		return errors.New("restore: the agent already has a conversation")
@@ -39,6 +41,7 @@ func (a *Agent) Restore(events []session.Event) error {
 		blocks  []anthropic.ContentBlockParamUnion
 		calls   []string
 		results = map[string]anthropic.ContentBlockParamUnion{}
+		waiting = map[string]bool{} // calls with an unanswered approval request
 	)
 	flush := func() {
 		if len(blocks) == 0 {
@@ -50,7 +53,7 @@ func (a *Agent) Restore(events []session.Event) error {
 			for _, c := range calls {
 				r, ok := results[c]
 				if !ok {
-					r = anthropic.NewToolResultBlock(c, "ERROR: no result was recorded; the session stopped before this tool finished", true)
+					r = anthropic.NewToolResultBlock(c, missingResult(waiting[c]), true)
 				}
 				rs = append(rs, r)
 			}
@@ -58,6 +61,7 @@ func (a *Agent) Restore(events []session.Event) error {
 		}
 		step, blocks, calls = -1, nil, nil
 		results = map[string]anthropic.ContentBlockParamUnion{}
+		waiting = map[string]bool{}
 	}
 
 	for i, e := range events {
@@ -85,10 +89,14 @@ func (a *Agent) Restore(events []session.Event) error {
 				blocks = append(blocks, anthropic.NewToolUseBlock(e.ToolUseID, e.Input, e.Tool))
 				calls = append(calls, e.ToolUseID)
 			}
+		case session.ApprovalRequested:
+			waiting[e.ToolUseID] = true
+		case session.ApprovalResolved:
+			delete(waiting, e.ToolUseID)
 		case session.ToolResult:
 			results[e.ToolUseID] = anthropic.NewToolResultBlock(e.ToolUseID, e.Output, e.IsError)
 		}
-		// approval_* and turn_done don't change the history.
+		// turn_done doesn't change the history.
 	}
 	flush()
 
@@ -99,4 +107,13 @@ func (a *Agent) Restore(events []session.Event) error {
 	a.SessionID = id
 	a.conversation = conv
 	return nil
+}
+
+// missingResult is the tool_result for a call whose result was never recorded.
+func missingResult(waitingForApproval bool) string {
+	if waitingForApproval {
+		return "ERROR: the session stopped while this tool call waited for approval, so the tool did not run"
+	}
+	return "ERROR: the session stopped before this tool's result was recorded. The tool may have run, " +
+		"fully or in part; check the current state before running it again"
 }
