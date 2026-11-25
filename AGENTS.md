@@ -31,3 +31,14 @@ Scratch output (workspaces, transcripts) belongs in `.tmp/`, never in the source
 - Tool errors are returned as `error` and become `is_error` tool results. Never `panic` in a tool.
 - New tools need a tests-first case in `internal/tools/tools_test.go` or `internal/agent/agent_test.go`.
 - Keep `CONTEXT.md` updated when a TODO is done or a design decision changes.
+
+## Pull request reviews
+Every push to a non-draft pull request gets an automated Codex review, posted as a PR comment (`.github/workflows/codex-review.yml`). When you work on a PR, read those comments, but verify each finding before acting on it; the reviewer can be wrong.
+
+## Reviewing pull requests
+When you are the reviewer, report real problems only, most severe first:
+- Bugs, races and goroutine or context leaks, error handling that loses or hides errors, security problems. Tools run model-chosen commands, so pay attention to paths escaping the workspace and to sandbox (Docker flags) and approval bypasses.
+- Breaks of the conventions above: side effects outside the `Executor`, `os`/`exec` in tools, terminal I/O in `internal/agent`, `panic` in a tool, a new tool without a test, an unapproved dependency.
+- Docs that the change makes wrong: `README.md`, `CONTEXT.md` (a finished TODO or a changed decision not recorded), this file.
+
+Skip formatting (CI runs gofmt and `go vet`), style and naming.
