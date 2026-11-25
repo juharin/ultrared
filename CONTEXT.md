@@ -1,6 +1,6 @@
 # CONTEXT: project state and handover notes
 
-*This file started as a snapshot of the research and coding session on 12 Nov 2026, so the work can be resumed by you or by an AI assistant. Last updated 20 Nov 2026. Update it as you go.*
+*This file started as a snapshot of the research and coding session on 12 Nov 2026, so the work can be resumed by you or by an AI assistant. Last updated 25 Nov 2026. Update it as you go.*
 
 ## Goal
 Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by building one in Go. The long-term target architecture is **client–server**:
@@ -59,6 +59,7 @@ Learn how AI coding harnesses (Claude Code, Codex, OpenCode, Pi, …) work by bu
 - [x] **Dev loop:** `Taskfile.yml` (`check`, `test-all`, `build`, `run`, `sandbox`, …), the sandbox image `sandbox/Dockerfile` (Go, git, ripgrep), `.env.example`, and a gitignored `.tmp/` for scratch workspaces and logs. The Docker test skips under `-short`.
 - [x] **CI:** `.github/workflows/ci.yml` runs `task check`, `task test-all` (with Docker), `task wasm:check` and `task vuln` on PRs and pushes to `main`. Dependabot covers Go modules, Actions and the sandbox image.
 - [x] **Branch protection** on `main` (a GitHub setting, turned on 24 Nov 2026): the "Check and test" CI job must pass before merging. Not required: the vulnerability check (a new advisory would otherwise block unrelated PRs), reviews (single maintainer), an up-to-date branch. Admins can bypass. Force pushes and deleting `main` are blocked.
+- [x] **Codex PR review** (25 Nov 2026): `.github/workflows/codex-review.yml` reviews every push to a non-draft PR (and a draft when marked ready) with `openai/codex-action` (read-only, no network) and posts a comment. Review guidance lives in `AGENTS.md`, which Codex loads. Needs the `OPENAI_API_KEY` secret; skips forks and Dependabot. Not a required check.
 - [ ] Live-API smoke test: a manually triggered workflow with the API key as a secret, behind a `live` build tag.
 - [ ] **Run against the real API on the Mac** and fix whatever breaks. Watch: prompt caching (not enabled), `max_tokens` stop reason, very long outputs.
 - [ ] **Event seam:** replace the `emit`/`approve` callbacks with typed session events and asynchronous approvals; the CLI renders events. Then rebuild the conversation from the JSONL/SQLite event log and add `resume <session>`. This is the first step toward client–server and the desktop app.

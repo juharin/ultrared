@@ -75,7 +75,7 @@ internal/executor/     Executor interface ("hands"): Local, Docker
 sandbox/Dockerfile     the image tools run in (Go, git, ripgrep)
 Taskfile.yml           dev tasks (`task` lists them)
 .env.example           settings for `task run`; copy to .env
-.github/               CI workflow, Dependabot
+.github/               CI and Codex review workflows, Dependabot
 AGENTS.md              instructions for coding agents working on this repo (incl. this one)
 CONTEXT.md             project state, decisions, roadmap: start here when resuming
 docs/                  research reports (read in order; see below)
@@ -89,6 +89,12 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pu
 - `task vuln`, as a separate job
 
 CI uses the latest stable Go. Dependabot opens weekly grouped updates for Go modules, GitHub Actions and the sandbox base image.
+
+**Codex review** (`.github/workflows/codex-review.yml`) runs on every push to a pull request, and posts its findings as a PR comment. Draft PRs are skipped until they are marked ready for review, which triggers a review:
+- It reviews the PR's merge commit with OpenAI Codex in a read-only sandbox without network. What it looks for is in the "Reviewing pull requests" section of `AGENTS.md`, which Codex reads.
+- It needs the `OPENAI_API_KEY` repository secret. It skips PRs from forks and runs triggered by Dependabot, since neither can read that secret.
+- A newer push cancels a review still running for the same PR.
+- It is not a required check, so a failed review does not block merging.
 
 ## Learning path: the docs
 
