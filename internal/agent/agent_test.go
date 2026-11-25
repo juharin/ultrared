@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,8 +29,9 @@ import (
 )
 
 // fakeAnthropic scripts three model turns: edit_file on a.txt, then bash
-// `cat a.txt`, then a final answer. wantFile is what the bash result must
-// contain when it comes back: "x = 2" if the edit ran, "x = 1" if it didn't.
+// `cat a.txt`, then a final answer; any later request gets a plain answer.
+// wantFile is what the bash result must contain when it comes back: "x = 2"
+// if the edit ran, "x = 1" if it didn't.
 func fakeAnthropic(t *testing.T, wantFile string) *httptest.Server {
 	var mu sync.Mutex
 	step := 0
@@ -71,12 +73,15 @@ func fakeAnthropic(t *testing.T, wantFile string) *httptest.Server {
 			content = []map[string]any{
 				{"type": "tool_use", "id": "t2", "name": "bash", "input": map[string]string{"command": "cat a.txt"}},
 			}
-		default:
+		case 3:
 			last := string(req.Messages[len(req.Messages)-1])
 			if !strings.Contains(last, wantFile) {
 				t.Errorf("bash result not fed back (want %q); last message: %s", wantFile, last)
 			}
 			content = []map[string]any{{"type": "text", "text": "Done."}}
+			stop = "end_turn"
+		default: // later turns, e.g. after a resume: just answer
+			content = []map[string]any{{"type": "text", "text": "Still here."}}
 			stop = "end_turn"
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -363,5 +368,148 @@ func TestResolveUnknownRequest(t *testing.T) {
 	var a Agent
 	if err := a.Resolve("nope", true); err == nil {
 		t.Fatal("Resolve of an unknown request succeeded")
+	}
+}
+
+// --- resume -------------------------------------------------------------------
+
+// conversationJSON is what the API would be sent as history.
+func conversationJSON(t *testing.T, a *Agent) string {
+	b, err := json.Marshal(a.conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Events record which model response (step) each block came from, so one
+// response with two tool calls is not confused with two responses.
+func TestEventSteps(t *testing.T) {
+	dir := workspace(t)
+	a := newAgent(fakeAnthropic(t, "x = 2"), &executor.Local{Root: dir})
+	var events []session.Event
+	a.Emit = func(e session.Event) { events = append(events, e) }
+	if err := a.Send(context.Background(), "set x to 2"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[session.Type][]int64{
+		session.UserMessage:   {0},
+		session.AssistantText: {1, 3},
+		session.ToolCall:      {1, 2},
+		session.ToolResult:    {1, 2},
+		session.TurnDone:      {0},
+	}
+	got := map[session.Type][]int64{}
+	for _, e := range events {
+		got[e.Type] = append(got[e.Type], e.Step)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("steps by event type:\n got %v\nwant %v", got, want)
+	}
+}
+
+// Restoring from the events gives back exactly the conversation the agent had,
+// and the session continues where it stopped: same id, next seq, next step.
+func TestRestoreRebuildsConversation(t *testing.T) {
+	dir := workspace(t)
+	srv := fakeAnthropic(t, "x = 2")
+	a := newAgent(srv, &executor.Local{Root: dir})
+	var events []session.Event
+	a.Emit = func(e session.Event) { events = append(events, e) }
+	if err := a.Send(context.Background(), "set x to 2"); err != nil {
+		t.Fatal(err)
+	}
+
+	b := newAgent(srv, &executor.Local{Root: dir})
+	b.SessionID = "" // taken from the events
+	if err := b.Restore(events); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := conversationJSON(t, b), conversationJSON(t, a); got != want {
+		t.Fatalf("restored conversation differs:\n got %s\nwant %s", got, want)
+	}
+
+	var more []session.Event
+	b.Emit = func(e session.Event) { more = append(more, e) }
+	if err := b.Send(context.Background(), "anything else?"); err != nil {
+		t.Fatal(err)
+	}
+	last := events[len(events)-1]
+	if more[0].Session != "s1" || more[0].Seq != last.Seq+1 {
+		t.Errorf("first new event = %+v, want session s1, seq %d", more[0], last.Seq+1)
+	}
+	if text, _ := find(more, session.AssistantText, ""); text.Step != 4 || text.Text != "Still here." {
+		t.Errorf("new reply = %+v, want step 4 'Still here.'", text)
+	}
+}
+
+// One model response with two tool calls becomes one assistant message with
+// two tool_use blocks, followed by one user message with both results.
+func TestRestoreGroupsByStep(t *testing.T) {
+	in := json.RawMessage(`{"command":"true"}`)
+	events := []session.Event{
+		{Session: "s", Seq: 1, Type: session.UserMessage, Text: "go"},
+		{Session: "s", Seq: 2, Step: 1, Type: session.ToolCall, ToolUseID: "a", Tool: "bash", Input: in},
+		{Session: "s", Seq: 3, Step: 1, Type: session.ToolResult, ToolUseID: "a", Tool: "bash", Output: "ok a"},
+		{Session: "s", Seq: 4, Step: 1, Type: session.ToolCall, ToolUseID: "b", Tool: "bash", Input: in},
+		{Session: "s", Seq: 5, Step: 1, Type: session.ToolResult, ToolUseID: "b", Tool: "bash", Output: "ok b"},
+		{Session: "s", Seq: 6, Step: 2, Type: session.AssistantText, Text: "both done"},
+		{Session: "s", Seq: 7, Type: session.TurnDone},
+	}
+	var a Agent
+	if err := a.Restore(events); err != nil {
+		t.Fatal(err)
+	}
+	roles := []string{}
+	for _, m := range a.conversation {
+		roles = append(roles, fmt.Sprintf("%s:%d", m.Role, len(m.Content)))
+	}
+	if want := []string{"user:1", "assistant:2", "user:2", "assistant:1"}; !reflect.DeepEqual(roles, want) {
+		t.Fatalf("messages = %v, want %v", roles, want)
+	}
+}
+
+// A session that stopped after a tool call but before its result (a crash, or
+// waiting for an approval) gets an error result, so the history stays valid:
+// the API rejects a tool_use without a matching tool_result.
+func TestRestoreFillsMissingToolResult(t *testing.T) {
+	events := []session.Event{
+		{Session: "s", Seq: 1, Type: session.UserMessage, Text: "go"},
+		{Session: "s", Seq: 2, Step: 1, Type: session.ToolCall, ToolUseID: "a", Tool: "bash", Input: json.RawMessage(`{}`)},
+		{Session: "s", Seq: 3, Step: 1, Type: session.ApprovalRequested, ToolUseID: "a", Tool: "bash"},
+	}
+	var a Agent
+	if err := a.Restore(events); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.conversation) != 3 {
+		t.Fatalf("got %d messages, want user, assistant, user(tool_result)", len(a.conversation))
+	}
+	last := conversationJSON(t, &Agent{conversation: a.conversation[2:]})
+	if !strings.Contains(last, `"tool_use_id":"a"`) || !strings.Contains(last, `"is_error":true`) {
+		t.Fatalf("missing tool_result not filled in: %s", last)
+	}
+}
+
+func TestRestoreRejectsBadLogs(t *testing.T) {
+	ok := session.Event{Session: "s", Seq: 1, Type: session.UserMessage, Text: "hi"}
+	cases := map[string][]session.Event{
+		"empty":          nil,
+		"two sessions":   {ok, {Session: "other", Seq: 2, Type: session.TurnDone}},
+		"seq not rising": {ok, {Session: "s", Seq: 1, Type: session.TurnDone}},
+	}
+	for name, events := range cases {
+		var a Agent
+		if err := a.Restore(events); err == nil {
+			t.Errorf("%s: Restore succeeded, want an error", name)
+		}
+	}
+
+	var used Agent
+	if err := used.Restore([]session.Event{ok}); err != nil {
+		t.Fatal(err)
+	}
+	if err := used.Restore([]session.Event{ok}); err == nil {
+		t.Error("Restore into an agent that already has a conversation succeeded")
 	}
 }

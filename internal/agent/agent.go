@@ -37,6 +37,7 @@ type Agent struct {
 
 	mu      sync.Mutex
 	seq     int64
+	step    int64                // model responses so far; only Send and Restore touch it
 	pending map[string]chan bool // tool_use_id -> answer, while waiting for approval
 
 	conversation []anthropic.MessageParam
@@ -70,17 +71,19 @@ func (a *Agent) Send(ctx context.Context, userText string) (err error) {
 		if err != nil {
 			return err
 		}
+		a.step++
+		step := a.step
 		a.conversation = append(a.conversation, msg.ToParam())
 
 		var results []anthropic.ContentBlockParamUnion
 		for _, block := range msg.Content {
 			switch b := block.AsAny().(type) {
 			case anthropic.TextBlock:
-				a.emit(session.Event{Type: session.AssistantText, Text: b.Text})
+				a.emit(session.Event{Type: session.AssistantText, Step: step, Text: b.Text})
 			case anthropic.ToolUseBlock:
-				a.emit(session.Event{Type: session.ToolCall, ToolUseID: b.ID, Tool: b.Name, Input: b.Input})
-				out, isErr := a.runTool(ctx, b.ID, b.Name, b.Input)
-				a.emit(session.Event{Type: session.ToolResult, ToolUseID: b.ID, Tool: b.Name, Output: out, IsError: isErr})
+				a.emit(session.Event{Type: session.ToolCall, Step: step, ToolUseID: b.ID, Tool: b.Name, Input: b.Input})
+				out, isErr := a.runTool(ctx, step, b.ID, b.Name, b.Input)
+				a.emit(session.Event{Type: session.ToolResult, Step: step, ToolUseID: b.ID, Tool: b.Name, Output: out, IsError: isErr})
 				results = append(results, anthropic.NewToolResultBlock(b.ID, out, isErr))
 			}
 		}
@@ -92,13 +95,13 @@ func (a *Agent) Send(ctx context.Context, userText string) (err error) {
 	return fmt.Errorf("stopped after %d turns", a.MaxTurns)
 }
 
-func (a *Agent) runTool(ctx context.Context, id, name string, input json.RawMessage) (string, bool) {
+func (a *Agent) runTool(ctx context.Context, step int64, id, name string, input json.RawMessage) (string, bool) {
 	for _, t := range a.Tools {
 		if t.Name != name {
 			continue
 		}
 		if a.NeedsApproval != nil && a.NeedsApproval(name, input) {
-			if ok, why := a.awaitApproval(ctx, id, name, input); !ok {
+			if ok, why := a.awaitApproval(ctx, step, id, name, input); !ok {
 				return why, true
 			}
 		}
@@ -114,7 +117,7 @@ func (a *Agent) runTool(ctx context.Context, id, name string, input json.RawMess
 // awaitApproval emits approval_requested and blocks until a client calls
 // Resolve or the turn is cancelled. It reports whether the tool may run and,
 // if not, why.
-func (a *Agent) awaitApproval(ctx context.Context, id, name string, input json.RawMessage) (bool, string) {
+func (a *Agent) awaitApproval(ctx context.Context, step int64, id, name string, input json.RawMessage) (bool, string) {
 	answer := make(chan bool, 1) // buffered: Resolve never blocks, even when called from inside Emit
 	a.mu.Lock()
 	if a.pending == nil {
@@ -123,7 +126,7 @@ func (a *Agent) awaitApproval(ctx context.Context, id, name string, input json.R
 	a.pending[id] = answer
 	a.mu.Unlock()
 
-	a.emit(session.Event{Type: session.ApprovalRequested, ToolUseID: id, Tool: name, Input: input})
+	a.emit(session.Event{Type: session.ApprovalRequested, Step: step, ToolUseID: id, Tool: name, Input: input})
 
 	allow, why := false, "denied by user"
 	select {
@@ -134,7 +137,7 @@ func (a *Agent) awaitApproval(ctx context.Context, id, name string, input json.R
 		a.mu.Unlock()
 		why = "interrupted while waiting for approval"
 	}
-	a.emit(session.Event{Type: session.ApprovalResolved, ToolUseID: id, Approved: &allow})
+	a.emit(session.Event{Type: session.ApprovalResolved, Step: step, ToolUseID: id, Approved: &allow})
 	return allow, why
 }
 
