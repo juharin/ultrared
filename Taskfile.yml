@@ -7,6 +7,7 @@ dotenv: ['.env']
 vars:
   SANDBOX_IMAGE: ultrared-sandbox
   DIR: '{{.DIR | default ".tmp/workspace"}}'
+  SESSIONS: .tmp/sessions # one event log per session, <id>.jsonl
 
 tasks:
   default:
@@ -66,8 +67,31 @@ tasks:
       - sh: '[ -n "$ANTHROPIC_API_KEY" ]'
         msg: 'ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example) or export it.'
     cmds:
-      - mkdir -p "{{.DIR}}" .tmp/logs
-      - go run ./cmd/ultrared -dir "{{.DIR}}" -docker {{.SANDBOX_IMAGE}} -log ".tmp/logs/$(date +%Y%m%d-%H%M%S).jsonl" {{.CLI_ARGS}}
+      - mkdir -p "{{.DIR}}"
+      - go run ./cmd/ultrared -dir "{{.DIR}}" -docker {{.SANDBOX_IMAGE}} -sessions {{.SESSIONS}} {{.CLI_ARGS}}
+
+  resume:
+    desc: 'Continue a session in the sandbox container: task resume ID=<id> (see task sessions). Pass the same DIR it used'
+    interactive: true
+    deps: [sandbox]
+    requires:
+      vars: [ID]
+    preconditions:
+      - sh: '[ -n "$ANTHROPIC_API_KEY" ]'
+        msg: 'ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example) or export it.'
+    cmds:
+      - go run ./cmd/ultrared -dir "{{.DIR}}" -docker {{.SANDBOX_IMAGE}} -sessions {{.SESSIONS}} -resume {{.ID}} {{.CLI_ARGS}}
+
+  sessions:
+    desc: List saved sessions, newest first
+    silent: true
+    cmds:
+      - |
+        if ls {{.SESSIONS}}/*.jsonl >/dev/null 2>&1; then
+          ls -t {{.SESSIONS}} | sed 's/\.jsonl$//'
+        else
+          echo "No sessions yet in {{.SESSIONS}}"
+        fi
 
   run:host:
     desc: 'Run the agent with tools directly on this machine (no sandbox!). Same DIR and -- flags as run'
@@ -76,8 +100,8 @@ tasks:
       - sh: '[ -n "$ANTHROPIC_API_KEY" ]'
         msg: 'ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example) or export it.'
     cmds:
-      - mkdir -p "{{.DIR}}" .tmp/logs
-      - go run ./cmd/ultrared -dir "{{.DIR}}" -log ".tmp/logs/$(date +%Y%m%d-%H%M%S).jsonl" {{.CLI_ARGS}}
+      - mkdir -p "{{.DIR}}"
+      - go run ./cmd/ultrared -dir "{{.DIR}}" -sessions {{.SESSIONS}} {{.CLI_ARGS}}
 
   wasm:check:
     desc: Vet and build the WASM experiment (separate module, needs Go >= 1.25)
@@ -88,6 +112,6 @@ tasks:
       - go build -o /dev/null ./host
 
   clean:
-    desc: Remove build outputs (keeps .tmp/, which holds your scratch workspaces and logs)
+    desc: Remove build outputs (keeps .tmp/, which holds your scratch workspaces and sessions)
     cmds:
       - rm -rf bin

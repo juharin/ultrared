@@ -3,7 +3,8 @@
 //	go run ./cmd/ultrared -dir ./myrepo                             # tools run on the host (no isolation!)
 //	go run ./cmd/ultrared -dir ./myrepo -docker ultrared-sandbox    # tools run in a locked-down container
 //	go run ./cmd/ultrared -dir ./myrepo -docker ultrared-sandbox -runtime runsc   # + gVisor
-//	go run ./cmd/ultrared -dir ./myrepo -log events.jsonl           # also write the session's events
+//	go run ./cmd/ultrared -dir ./myrepo -sessions .tmp/sessions    # keep the session log in .tmp/sessions/<id>.jsonl
+//	go run ./cmd/ultrared -dir ./myrepo -sessions .tmp/sessions -resume <id>   # continue that session
 //
 // Day to day, `task run` does this for you (see Taskfile.yml).
 //
@@ -13,15 +14,12 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/juharin/ultrared/internal/agent"
@@ -37,30 +35,52 @@ func main() {
 	network := flag.Bool("net", false, "give the container network access")
 	yolo := flag.Bool("yolo", false, "do not ask before bash/write/edit")
 	model := flag.String("model", string(agent.DefaultModel), "model id")
-	logPath := flag.String("log", "", "append the session's events here, one JSON object per line")
+	sessionsDir := flag.String("sessions", "", "keep each session's event log in this directory, as <id>.jsonl")
+	resume := flag.String("resume", "", "continue the session with this id (needs -sessions)")
 	flag.Parse()
 
 	ctx := context.Background()
+	fail := func(err error) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	client := anthropic.NewClient()
+	ag := &agent.Agent{
+		Client: &client, Model: anthropic.Model(*model),
+		Tools: tools.All(), MaxTurns: 60, SessionID: newSessionID(),
+	}
 
 	// The event log: one JSON event per line, the same events any client sees.
-	// Opened before the container starts, so a bad path can't leak a container.
+	// Set up, and a resumed session restored, before the container starts, so
+	// that a bad path or a broken log can't leak a container.
 	var eventLog *json.Encoder
-	if *logPath != "" {
-		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if *resume != "" && *sessionsDir == "" {
+		fail(fmt.Errorf("-resume needs -sessions DIR, the directory that holds the session logs"))
+	}
+	if *sessionsDir != "" {
+		if *resume != "" {
+			ag.SessionID = *resume
+		}
+		f, events, err := openSessionLog(*sessionsDir, ag.SessionID, *resume != "")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "event log:", err)
-			os.Exit(1)
+			fail(err)
 		}
 		defer f.Close()
 		eventLog = json.NewEncoder(f)
+		if *resume != "" {
+			if err := ag.Restore(events); err != nil {
+				fail(err)
+			}
+			fmt.Printf("Resumed session %s: %s\n", ag.SessionID, recap(events))
+		}
 	}
 
 	var ex executor.Executor = &executor.Local{Root: *dir}
 	if *image != "" {
 		d, err := executor.NewDocker(ctx, *image, *dir, *runtime, *network)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			fail(err)
 		}
 		defer d.Close()
 		ex = d
@@ -78,11 +98,7 @@ func main() {
 		return scanner.Text(), true
 	}
 
-	client := anthropic.NewClient()
-	ag := &agent.Agent{
-		Client: &client, Model: anthropic.Model(*model), Exec: ex,
-		Tools: tools.All(), MaxTurns: 60, SessionID: newSessionID(),
-	}
+	ag.Exec = ex
 	if !*yolo {
 		ag.NeedsApproval = func(name string, _ json.RawMessage) bool { return name != "read_file" }
 	}
@@ -118,7 +134,10 @@ func main() {
 		}
 	}()
 
-	fmt.Printf("Session %s. Chat with Claude (ctrl-c stops a turn, ctrl-d quits)\n", ag.SessionID)
+	if *sessionsDir != "" {
+		fmt.Printf("Session %s (continue it later with -resume %s)\n", ag.SessionID, ag.SessionID)
+	}
+	fmt.Println("Chat with Claude (ctrl-c stops a turn, ctrl-d quits)")
 	for {
 		fmt.Print("\033[34mYou\033[0m: ")
 		in, ok := readLine()
@@ -149,15 +168,6 @@ func render(e session.Event) {
 	case session.ToolResult:
 		fmt.Printf("\033[90m  %s\033[0m\n", strings.ReplaceAll(truncate(e.Output, 200), "\n", "⏎"))
 	}
-}
-
-// newSessionID returns a short random id, e.g. "3f9a1c0b2d4e".
-func newSessionID() string {
-	b := make([]byte, 6)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
 }
 
 func truncate(s string, n int) string {

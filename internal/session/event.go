@@ -30,6 +30,10 @@ type Event struct {
 	Seq     int64     `json:"seq"` // 1, 2, 3, … within a session; a reconnecting client resumes after the last seq it saw
 	Time    time.Time `json:"time"`
 	Type    Type      `json:"type"`
+	// Step is the model response an event belongs to: 1, 2, 3, … across the
+	// session. Set on assistant_text, tool_call, approval_* and tool_result;
+	// it tells one response with two tool calls apart from two responses.
+	Step int64 `json:"step,omitempty"`
 
 	Text      string          `json:"text,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
