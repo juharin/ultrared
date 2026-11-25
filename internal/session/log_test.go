@@ -9,9 +9,12 @@ func TestReadLog(t *testing.T) {
 	log := `{"session":"s","seq":1,"type":"user_message","text":"hi"}
 {"session":"s","seq":2,"type":"turn_done"}
 `
-	events, err := ReadLog(strings.NewReader(log))
+	events, size, err := ReadLog(strings.NewReader(log))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if size != int64(len(log)) {
+		t.Errorf("size = %d, want %d", size, len(log))
 	}
 	if len(events) != 2 || events[0].Text != "hi" || events[1].Type != TurnDone {
 		t.Fatalf("got %+v", events)
@@ -23,12 +26,15 @@ func TestReadLog(t *testing.T) {
 func TestReadLogDropsTornLastLine(t *testing.T) {
 	log := `{"session":"s","seq":1,"type":"user_message","text":"hi"}
 {"session":"s","seq":2,"ty`
-	events, err := ReadLog(strings.NewReader(log))
+	events, size, err := ReadLog(strings.NewReader(log))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if want := strings.Index(log, "\n") + 1; size != int64(want) {
+		t.Errorf("size = %d, want %d (the complete first line only)", size, want)
 	}
 }
 
@@ -37,7 +43,7 @@ func TestReadLogRejectsBadLine(t *testing.T) {
 not json
 {"session":"s","seq":2,"type":"turn_done"}
 `
-	if _, err := ReadLog(strings.NewReader(log)); err == nil || !strings.Contains(err.Error(), "line 2") {
+	if _, _, err := ReadLog(strings.NewReader(log)); err == nil || !strings.Contains(err.Error(), "line 2") {
 		t.Fatalf("err = %v, want an error naming line 2", err)
 	}
 }
